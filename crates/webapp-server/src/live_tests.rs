@@ -180,3 +180,25 @@ async fn email_login_flow() {
 
     cleanup(&app).await;
 }
+
+#[tokio::test]
+#[ignore]
+async fn discord_account_keyed_by_discord_id() {
+    let app = test_app();
+    let redis = app.redis();
+
+    let first = account::find_or_create_by_discord(redis, "111", "Nelly").await.unwrap();
+    assert_eq!(first.discord_id.as_deref(), Some("111"));
+    assert_eq!(first.display_name, "Nelly");
+    assert_eq!(first.email, None);
+
+    // Same Discord user again (even under a new name): same account.
+    let again = account::find_or_create_by_discord(redis, "111", "Renamed").await.unwrap();
+    assert_eq!(again, first);
+
+    // A different Discord user: a different account.
+    let other = account::find_or_create_by_discord(redis, "222", "Other").await.unwrap();
+    assert_ne!(other.id, first.id);
+
+    cleanup(&app).await;
+}

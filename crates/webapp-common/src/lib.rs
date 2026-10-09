@@ -24,6 +24,24 @@ pub struct AuthConfig {
     pub discord_client_id: Option<String>,
 }
 
+/// Request body of `POST /api/auth/discord`: the OAuth2 code from the
+/// Embedded App SDK's `authorize` command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscordLoginRequest {
+    pub code: String,
+}
+
+/// Response body of `POST /api/auth/discord`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscordLoginResponse {
+    /// Session token: keep in memory and send as `Authorization: Bearer`.
+    pub token: String,
+    /// Discord OAuth2 access token, for the SDK's `authenticate` command if the
+    /// app needs SDK features beyond sign-in.
+    pub discord_access_token: String,
+    pub account: Account,
+}
+
 /// Request body of `POST /api/auth/email/start`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmailStartRequest {

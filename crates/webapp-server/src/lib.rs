@@ -17,6 +17,7 @@
 pub mod account;
 mod auth;
 mod config;
+mod discord;
 mod email;
 mod error;
 pub mod keys;
@@ -35,7 +36,7 @@ use axum::{
 };
 
 pub use auth::Auth;
-pub use config::{Config, EmailDelivery};
+pub use config::{Config, DiscordConfig, EmailDelivery};
 pub use error::ApiError;
 pub use redis::Redis;
 
@@ -88,6 +89,7 @@ where
         .route("/api/auth/config", get(auth::config))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/discord", post(discord::login))
         .route("/api/auth/email/start", post(email::start))
         .route("/api/auth/email/confirm", post(email::confirm))
 }

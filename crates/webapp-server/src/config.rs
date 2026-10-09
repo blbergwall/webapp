@@ -9,13 +9,21 @@ pub struct Config {
     /// share one Upstash database. Empty when unset.
     pub key_prefix: String,
     /// `None` disables Discord activity login.
-    pub discord_client_id: Option<String>,
+    pub discord: Option<DiscordConfig>,
     /// Shown to users, e.g. in the login email subject (`APP_NAME`).
     pub app_name: String,
     /// Origin the emailed login link points at (`PUBLIC_BASE_URL`), e.g.
     /// `https://example.com`. Required when email login is enabled.
     pub public_base_url: Option<String>,
     pub email: EmailDelivery,
+}
+
+/// Discord application credentials (`DISCORD_CLIENT_ID`,
+/// `DISCORD_CLIENT_SECRET`).
+#[derive(Debug, Clone)]
+pub struct DiscordConfig {
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 /// How login emails are delivered.
@@ -39,6 +47,14 @@ impl Config {
             None if optional("DEV_MODE").as_deref() == Some("1") => EmailDelivery::Console,
             None => EmailDelivery::Disabled,
         };
+        let discord = match (optional("DISCORD_CLIENT_ID"), optional("DISCORD_CLIENT_SECRET")) {
+            (Some(client_id), Some(client_secret)) => Some(DiscordConfig {
+                client_id,
+                client_secret,
+            }),
+            (None, None) => None,
+            _ => bail!("DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET must be set together"),
+        };
         let public_base_url = optional("PUBLIC_BASE_URL").map(|url| url.trim_end_matches('/').to_string());
         if !matches!(email, EmailDelivery::Disabled) && public_base_url.is_none() {
             bail!("PUBLIC_BASE_URL is required when email login is enabled");
@@ -48,7 +64,7 @@ impl Config {
             upstash_url: required("UPSTASH_REDIS_REST_URL")?,
             upstash_token: required("UPSTASH_REDIS_REST_TOKEN")?,
             key_prefix: optional("REDIS_KEY_PREFIX").unwrap_or_default(),
-            discord_client_id: optional("DISCORD_CLIENT_ID"),
+            discord,
             app_name: optional("APP_NAME").unwrap_or_else(|| "webapp".to_string()),
             public_base_url,
             email,

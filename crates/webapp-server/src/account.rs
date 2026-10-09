@@ -62,6 +62,24 @@ pub(crate) async fn find_or_create_by_email(redis: &Redis, email: &str) -> Resul
     .await
 }
 
+/// The account for a Discord user, created on first sign-in with the given
+/// display name.
+pub(crate) async fn find_or_create_by_discord(
+    redis: &Redis,
+    discord_id: &str,
+    display_name: &str,
+) -> Result<Account> {
+    let identity_key = format!("{}{discord_id}", keys::IDENTITY_DISCORD);
+    find_or_create(redis, &identity_key, |id, created| Account {
+        id,
+        created,
+        display_name: display_name.to_string(),
+        email: None,
+        discord_id: Some(discord_id.to_string()),
+    })
+    .await
+}
+
 async fn follow_identity(redis: &Redis, identity_key: &str) -> Result<Option<Account>> {
     match redis.get(identity_key).await? {
         Some(account_id) => get(redis, &account_id).await,

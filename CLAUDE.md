@@ -107,6 +107,7 @@ Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` r
 | `GET /api/auth/config` | 200 `AuthConfig` | — |
 | `GET /api/auth/me` | 200 `Account` | 401 |
 | `POST /api/auth/logout` | 204, clears session cookie | 403 (CSRF) |
+| `POST /api/auth/discord {code}` | 200 `{token, discord_access_token, account}` (bearer token, no cookie) | 400 empty code, 401 Discord rejected the code (`invalid_grant`), 404 Discord not configured, 500 other Discord failures incl. bad credentials (logged) |
 | `POST /api/auth/email/start {email}` | 204, sets `pending_login` cookie | 400 bad email, 429 rate-limited (2 min per IP), 404 email login disabled |
 | `POST /api/auth/email/confirm {code, auto}` | 200 `Account`, sets session cookie, clears `pending_login` | 410 code expired/used; 409 `auto` refused (not this browser, so the code is **not** consumed: show a "Finish signing in" button and retry with `auto: false`) |
 

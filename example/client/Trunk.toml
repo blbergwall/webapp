@@ -1,0 +1,15 @@
+[build]
+dist = "dist"
+# Discord's activity proxy rewrites URLs inside served JS, which breaks SRI hashes.
+no_sri = true
+
+[serve]
+port = 8080
+# Trunk's reload WebSocket is blocked by Discord's CSP.
+no_autoreload = true
+
+[[proxy]]
+backend = "http://127.0.0.1:3000/api"
+
+[[proxy]]
+backend = "http://127.0.0.1:3000/health"

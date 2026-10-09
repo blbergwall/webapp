@@ -1,0 +1,9 @@
+[package]
+name = "example-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true

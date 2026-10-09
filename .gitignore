@@ -1,0 +1,9 @@
+target/
+dist/
+.env
+.env.*
+.vs/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

@@ -4,3 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+webapp-common.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+getrandom.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+dotenvy.workspace = true
+tokio.workspace = true

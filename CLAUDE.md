@@ -78,6 +78,10 @@ trunk build --release
 
 Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install trunk`.
 
+**Configuration:** copy `.env.example` to `.env` (gitignored) at the repo root and fill it in. The example server loads it with `dotenvy`; the framework itself only reads environment variables (`webapp_server::Config::from_env`). Local dev uses its own Upstash database, separate from other projects.
+
+**Live Redis tests:** `cargo test -p webapp-server -- --ignored` runs the tests in `crates/webapp-server/src/live_tests.rs` against the Upstash DB in `.env`. Each run uses a random key prefix (`webapp-test:<hex>:`) and deletes its keys afterwards. Plain `cargo test` skips them.
+
 **Local dev runs two processes. Open `http://localhost:8080`:**
 - `cargo run -p example-server` runs the backend (axum, native Rust) on `:3000`: `/health` and `/api/*`. Restart it after server code changes.
 - `trunk serve` runs the frontend dev server on `:8080`. It compiles the client to WASM, serves the page, rebuilds when client code changes (refresh the browser yourself, since auto-reload is disabled for Discord), and proxies `/api` and `/health` to `:3000`, so the browser sees one origin.
@@ -86,7 +90,15 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 
 **Discord** just loads a URL. In dev, point the Cloudflare tunnel at `:8080`. In production, point the URL mapping at the deployed server.
 
-Sanity check after a build: `GET /health` returns `ok`.
+Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` returns JSON; `GET /api/auth/me` and `GET /api/hello` return 401 without a session.
+
+## Framework API Conventions (`webapp-server`)
+
+- Apps hold a `WebApp` (config + Redis client, cheap to clone) in their axum state and `merge(webapp_server::auth_router())`. Both the router and the `Auth` extractor work for any state `S` where `WebApp: FromRef<S>`.
+- `Auth(account)` on a handler means a session is required. The bearer header wins over the cookie, and an invalid bearer is a 401 with no cookie fallback.
+- **CSRF rule (enforced in `Auth`):** cookie-authenticated requests with a non-GET/HEAD/OPTIONS method must send `Content-Type: application/json`, otherwise 403. Clients must send JSON (even `{}`) on every write.
+- Redis keys: the framework's 2-letter prefixes live in `keys.rs`; apps must not reuse them. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
+- `ApiError::Internal` logs the error and returns a generic 500. Never put error details in responses.
 
 ## Discord Activity: Known Quirks
 

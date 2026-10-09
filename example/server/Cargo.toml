@@ -5,5 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+webapp-server.workspace = true
 axum.workspace = true
+dotenvy.workspace = true
 tokio.workspace = true

@@ -60,7 +60,7 @@ pub(crate) async fn login(
 
     let account =
         account::find_or_create_by_discord(app.redis(), &user.id, user.display_name()).await?;
-    let token = session::create(app.redis(), &account.id).await?;
+    let token = session::create(app.redis(), &account.id, session::SessionKind::Discord).await?;
 
     Ok(Json(DiscordLoginResponse {
         token,

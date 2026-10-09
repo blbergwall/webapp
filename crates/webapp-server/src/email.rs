@@ -113,7 +113,7 @@ pub(crate) async fn confirm(
     let record: LoginCode = serde_json::from_str(&record).context("corrupt login code")?;
 
     let account = account::find_or_create_by_email(redis, &record.email).await?;
-    let token = session::create(redis, &account.id).await?;
+    let token = session::create(redis, &account.id, session::SessionKind::Website).await?;
 
     Ok((
         AppendHeaders([

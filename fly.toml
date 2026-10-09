@@ -1,0 +1,30 @@
+# Fly.io config for the example app. Secrets (UPSTASH_*, RESEND_*, DISCORD_*)
+# are set with `fly secrets import`, never here — see docs/deploy.md.
+app = "webapp-example"
+primary_region = "iad"
+
+[build]
+
+[env]
+  APP_NAME = "webapp example"
+  PUBLIC_BASE_URL = "https://webapp-example.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+# Smallest Fly machine. One machine only (an example app doesn't need Fly's
+# default second machine for availability): deploy with `fly deploy --ha=false`.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

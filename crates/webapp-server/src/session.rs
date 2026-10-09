@@ -10,19 +10,43 @@ pub const SESSION_COOKIE: &str = "session";
 /// requested it. Scoped to the email endpoints.
 pub const PENDING_LOGIN_COOKIE: &str = "pending_login";
 
+/// Marks a Discord activity session's token, so its (shorter) TTL can be
+/// chosen from the token alone, without another Redis round trip.
+pub const DISCORD_TOKEN_PREFIX: &str = "dc_";
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SessionKind {
+    /// Cookie session from email login.
+    Website,
+    /// Bearer-token session from Discord activity login.
+    Discord,
+}
+
 /// Creates a session for `account_id` and returns its token.
-pub async fn create(redis: &Redis, account_id: &str) -> Result<String> {
-    let token = random_hex(32);
+pub async fn create(redis: &Redis, account_id: &str, kind: SessionKind) -> Result<String> {
+    let token = match kind {
+        SessionKind::Website => random_hex(32),
+        SessionKind::Discord => format!("{DISCORD_TOKEN_PREFIX}{}", random_hex(32)),
+    };
     redis
-        .set_ex(&session_key(&token), account_id, keys::SESSION_TTL_SECS)
+        .set_ex(&session_key(&token), account_id, ttl_secs(&token))
         .await?;
     Ok(token)
 }
 
 /// Looks up the account id for a session token, refreshing the session's
-/// sliding TTL in the same round trip.
+/// sliding TTL in the same command.
 pub async fn resolve(redis: &Redis, token: &str) -> Result<Option<String>> {
-    redis.getex(&session_key(token), keys::SESSION_TTL_SECS).await
+    redis.getex(&session_key(token), ttl_secs(token)).await
+}
+
+/// The sliding TTL for a session, by the kind its token encodes.
+fn ttl_secs(token: &str) -> u64 {
+    if token.starts_with(DISCORD_TOKEN_PREFIX) {
+        keys::DISCORD_SESSION_TTL_SECS
+    } else {
+        keys::SESSION_TTL_SECS
+    }
 }
 
 pub async fn delete(redis: &Redis, token: &str) -> Result<()> {
@@ -108,6 +132,12 @@ mod tests {
     #[test]
     fn missing_cookie() {
         assert_eq!(cookie_value(&HeaderMap::new(), "session"), None);
+    }
+
+    #[test]
+    fn ttl_by_token_kind() {
+        assert_eq!(ttl_secs("abc123"), keys::SESSION_TTL_SECS);
+        assert_eq!(ttl_secs("dc_abc123"), keys::DISCORD_SESSION_TTL_SECS);
     }
 
     #[test]

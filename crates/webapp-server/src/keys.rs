@@ -20,10 +20,17 @@ pub const IDENTITY_EMAIL: &str = "IE";
 pub const IDENTITY_DISCORD: &str = "ID";
 
 /// `SS<token>` — session: value is the `account_id`. Sliding TTL, refreshed
-/// (via `GETEX`) on every authenticated request.
+/// (via `GETEX`, in the same command as the read) on every authenticated
+/// request. Discord sessions' tokens start with
+/// `session::DISCORD_TOKEN_PREFIX`, which selects the shorter TTL.
 pub const SESSION: &str = "SS";
-/// The sliding TTL applied to a session on creation and on each use.
+/// Sliding TTL of a website (cookie) session: keeps users signed in across
+/// visits.
 pub const SESSION_TTL_SECS: u64 = 90 * 24 * 60 * 60;
+/// Sliding TTL of a Discord activity session. Its token only lives in the
+/// activity's memory and every launch signs in afresh, so an unused session
+/// is abandoned; this short TTL cleans it up.
+pub const DISCORD_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// `LC<code>` — a one-time email login code (change 3). Consumed with
 /// `GETDEL`.

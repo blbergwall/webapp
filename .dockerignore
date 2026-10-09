@@ -1,0 +1,8 @@
+# Never send secrets or local build output to the image build.
+.env
+.env.*
+!.env.example
+.git
+build
+target
+docs

@@ -100,6 +100,18 @@ Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` r
 - Redis keys: the framework's 2-letter prefixes live in `keys.rs`; apps must not reuse them. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
 - `ApiError::Internal` logs the error and returns a generic 500. Never put error details in responses.
 
+## Auth API Contract
+
+| Endpoint | Success | Errors |
+|---|---|---|
+| `GET /api/auth/config` | 200 `AuthConfig` | — |
+| `GET /api/auth/me` | 200 `Account` | 401 |
+| `POST /api/auth/logout` | 204, clears session cookie | 403 (CSRF) |
+| `POST /api/auth/email/start {email}` | 204, sets `pending_login` cookie | 400 bad email, 429 rate-limited (2 min per IP), 404 email login disabled |
+| `POST /api/auth/email/confirm {code, auto}` | 200 `Account`, sets session cookie, clears `pending_login` | 410 code expired/used; 409 `auto` refused (not this browser, so the code is **not** consumed: show a "Finish signing in" button and retry with `auto: false`) |
+
+The emailed link is `{PUBLIC_BASE_URL}/?login_code=<code>`. The SPA reads the code and calls `confirm`. Email delivery is set by env: Resend if `RESEND_API_KEY` is set, else console output if `DEV_MODE=1`, else disabled. The example server serves with connect info so the rate limit sees the real peer IP locally (`Fly-Client-IP` on Fly).
+
 ## Discord Activity: Known Quirks
 
 The Discord activity proxy (`{clientId}.discordsays.com`) rewrites URLs in served files and enforces a strict CSP. These choices exist because of that:

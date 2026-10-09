@@ -23,7 +23,6 @@ pub async fn get(redis: &Redis, account_id: &str) -> Result<Option<Account>> {
 /// `SET NX`, so a reader can never follow an identity to a missing account.
 /// If a concurrent request claims the identity first, this request's orphan
 /// record is deleted and the winner's account is returned.
-#[allow(dead_code)] // called by email/Discord login (changes 3–4)
 pub(crate) async fn find_or_create(
     redis: &Redis,
     identity_key: &str,
@@ -47,6 +46,20 @@ pub(crate) async fn find_or_create(
     follow_identity(redis, identity_key)
         .await?
         .with_context(|| format!("identity {identity_key} claimed but its account is missing"))
+}
+
+/// The account for a (normalized) email address, created on first sign-in
+/// with the address's local part as its display name.
+pub(crate) async fn find_or_create_by_email(redis: &Redis, email: &str) -> Result<Account> {
+    let identity_key = format!("{}{email}", keys::IDENTITY_EMAIL);
+    find_or_create(redis, &identity_key, |id, created| Account {
+        id,
+        created,
+        display_name: email.split('@').next().unwrap_or(email).to_string(),
+        email: Some(email.to_string()),
+        discord_id: None,
+    })
+    .await
 }
 
 async fn follow_identity(redis: &Redis, identity_key: &str) -> Result<Option<Account>> {

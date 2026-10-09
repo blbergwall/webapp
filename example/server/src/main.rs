@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use axum::{Router, routing::get};
 use webapp_server::{Auth, WebApp};
 
@@ -17,7 +19,11 @@ async fn main() {
         .await
         .unwrap_or_else(|err| panic!("failed to bind {addr}: {err}"));
     println!("Listening on http://{addr}");
-    axum::serve(listener, app).await.expect("server error");
+    // Connect info gives the email rate limit a real client IP in local dev
+    // (on Fly.io it uses the `Fly-Client-IP` header instead).
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .expect("server error");
 }
 
 /// Example protected route: only reachable with a valid session.

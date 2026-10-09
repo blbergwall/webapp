@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// Framework settings, read from environment variables.
 #[derive(Debug, Clone)]
@@ -10,15 +10,48 @@ pub struct Config {
     pub key_prefix: String,
     /// `None` disables Discord activity login.
     pub discord_client_id: Option<String>,
+    /// Shown to users, e.g. in the login email subject (`APP_NAME`).
+    pub app_name: String,
+    /// Origin the emailed login link points at (`PUBLIC_BASE_URL`), e.g.
+    /// `https://example.com`. Required when email login is enabled.
+    pub public_base_url: Option<String>,
+    pub email: EmailDelivery,
+}
+
+/// How login emails are delivered.
+#[derive(Debug, Clone)]
+pub enum EmailDelivery {
+    /// Send via Resend's REST API (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`).
+    Resend { api_key: String, from: String },
+    /// `DEV_MODE=1` without a Resend key: print the login link to the console.
+    Console,
+    /// Email login turned off; its routes return 404.
+    Disabled,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let email = match optional("RESEND_API_KEY") {
+            Some(api_key) => EmailDelivery::Resend {
+                api_key,
+                from: required("RESEND_FROM_EMAIL")?,
+            },
+            None if optional("DEV_MODE").as_deref() == Some("1") => EmailDelivery::Console,
+            None => EmailDelivery::Disabled,
+        };
+        let public_base_url = optional("PUBLIC_BASE_URL").map(|url| url.trim_end_matches('/').to_string());
+        if !matches!(email, EmailDelivery::Disabled) && public_base_url.is_none() {
+            bail!("PUBLIC_BASE_URL is required when email login is enabled");
+        }
+
         Ok(Self {
             upstash_url: required("UPSTASH_REDIS_REST_URL")?,
             upstash_token: required("UPSTASH_REDIS_REST_TOKEN")?,
             key_prefix: optional("REDIS_KEY_PREFIX").unwrap_or_default(),
             discord_client_id: optional("DISCORD_CLIENT_ID"),
+            app_name: optional("APP_NAME").unwrap_or_else(|| "webapp".to_string()),
+            public_base_url,
+            email,
         })
     }
 }

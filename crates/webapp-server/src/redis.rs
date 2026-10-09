@@ -11,7 +11,8 @@ struct UpstashResponse {
 }
 
 /// Client for Upstash Redis's REST API. Cheap to clone (the inner
-/// `reqwest::Client` is reference-counted).
+/// `reqwest::Client` is reference-counted, and shared with the rest of the
+/// framework's outbound calls).
 ///
 /// The typed helpers take *unprefixed* keys and apply `Config::key_prefix`
 /// themselves. For any other command, build keys with [`Redis::key`] and pass
@@ -25,9 +26,9 @@ pub struct Redis {
 }
 
 impl Redis {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, http: reqwest::Client) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http,
             url: config.upstash_url.clone(),
             token: config.upstash_token.clone(),
             prefix: config.key_prefix.clone(),

@@ -17,6 +17,7 @@
 pub mod account;
 mod auth;
 mod config;
+mod email;
 mod error;
 pub mod keys;
 #[cfg(test)]
@@ -34,7 +35,7 @@ use axum::{
 };
 
 pub use auth::Auth;
-pub use config::Config;
+pub use config::{Config, EmailDelivery};
 pub use error::ApiError;
 pub use redis::Redis;
 
@@ -44,13 +45,15 @@ pub struct WebApp(Arc<Inner>);
 
 struct Inner {
     config: Config,
+    http: reqwest::Client,
     redis: Redis,
 }
 
 impl WebApp {
     pub fn new(config: Config) -> Self {
-        let redis = Redis::new(&config);
-        Self(Arc::new(Inner { config, redis }))
+        let http = reqwest::Client::new();
+        let redis = Redis::new(&config, http.clone());
+        Self(Arc::new(Inner { config, http, redis }))
     }
 
     /// Builds the framework from environment variables (see `Config`).
@@ -60,6 +63,11 @@ impl WebApp {
 
     pub fn config(&self) -> &Config {
         &self.0.config
+    }
+
+    /// Shared HTTP client for outbound API calls (Resend, Discord).
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.0.http
     }
 
     /// The Redis client, for apps to store their own data (under their own
@@ -80,4 +88,6 @@ where
         .route("/api/auth/config", get(auth::config))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/email/start", post(email::start))
+        .route("/api/auth/email/confirm", post(email::confirm))
 }

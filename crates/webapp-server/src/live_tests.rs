@@ -84,3 +84,99 @@ async fn session_lifecycle_and_prefix() {
 
     cleanup(&app).await;
 }
+
+#[tokio::test]
+#[ignore]
+async fn email_login_flow() {
+    use axum::{
+        Json,
+        extract::State,
+        http::{HeaderMap, HeaderValue, StatusCode, header},
+        response::IntoResponse,
+    };
+    use webapp_common::{EmailConfirmRequest, EmailStartRequest};
+
+    use crate::{EmailDelivery, email};
+
+    dotenvy::dotenv().ok();
+    let mut config = Config::from_env().expect("live tests need Upstash settings in .env");
+    config.key_prefix = format!("webapp-test:{}:", random_hex(4));
+    config.email = EmailDelivery::Console;
+    config.public_base_url = Some("http://localhost:8080".to_string());
+    let app = WebApp::new(config);
+
+    let start = |email: &str| {
+        let app = app.clone();
+        let request = EmailStartRequest { email: email.to_string() };
+        async move {
+            email::start(State(app), None, HeaderMap::new(), Json(request))
+                .await
+                .into_response()
+        }
+    };
+    let confirm = |code: &str, auto: bool, cookie: Option<&str>| {
+        let app = app.clone();
+        let request = EmailConfirmRequest { code: code.to_string(), auto };
+        let mut headers = HeaderMap::new();
+        if let Some(cookie) = cookie {
+            headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        }
+        async move { email::confirm(State(app), headers, Json(request)).await.into_response() }
+    };
+
+    // Invalid address is rejected before touching the rate limit.
+    assert_eq!(start("not-an-email").await.status(), StatusCode::BAD_REQUEST);
+
+    // Start: 204 and a pending cookie.
+    let response = start(" Tester@Example.com ").await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let set_cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+    let pending = set_cookie
+        .strip_prefix("pending_login=")
+        .and_then(|rest| rest.split(';').next())
+        .unwrap()
+        .to_string();
+
+    // Second request from the same (unknown) IP inside the window: 429.
+    assert_eq!(start("tester@example.com").await.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // Find the issued code (the console link isn't captured here).
+    let pattern = app.redis().key(&format!("{}*", keys::LOGIN_CODE));
+    let codes = app.redis().command(&["KEYS", &pattern]).await.unwrap();
+    let codes = codes.as_array().unwrap();
+    assert_eq!(codes.len(), 1);
+    let code = codes[0].as_str().unwrap().rsplit(keys::LOGIN_CODE).next().unwrap().to_string();
+
+    // Auto-confirm from another browser (no / wrong cookie): 409, code kept.
+    assert_eq!(confirm(&code, true, None).await.status(), StatusCode::CONFLICT);
+    let wrong = "pending_login=0000";
+    assert_eq!(confirm(&code, true, Some(wrong)).await.status(), StatusCode::CONFLICT);
+
+    // Auto-confirm from the requesting browser: signed in.
+    let cookie = format!("pending_login={pending}");
+    let response = confirm(&code, true, Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies: Vec<_> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|value| value.to_str().unwrap().to_string())
+        .collect();
+    assert!(cookies.iter().any(|c| c.starts_with("session=") && !c.starts_with("session=;")));
+    assert!(cookies.iter().any(|c| c.starts_with("pending_login=;")));
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let account: Account = serde_json::from_slice(&body).unwrap();
+    assert_eq!(account.email.as_deref(), Some("tester@example.com"));
+    assert_eq!(account.display_name, "tester");
+
+    // The code is single-use.
+    assert_eq!(confirm(&code, false, None).await.status(), StatusCode::GONE);
+
+    // Signing in again with the same address reaches the same account.
+    let again = account::find_or_create_by_email(app.redis(), "tester@example.com")
+        .await
+        .unwrap();
+    assert_eq!(again.id, account.id);
+
+    cleanup(&app).await;
+}

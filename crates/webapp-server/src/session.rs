@@ -6,8 +6,11 @@ use crate::{keys, random::random_hex, redis::Redis};
 /// Name of the website-mode session cookie.
 pub const SESSION_COOKIE: &str = "session";
 
+/// Name of the cookie binding an emailed login code to the browser that
+/// requested it. Scoped to the email endpoints.
+pub const PENDING_LOGIN_COOKIE: &str = "pending_login";
+
 /// Creates a session for `account_id` and returns its token.
-#[allow(dead_code)] // called by email/Discord login (changes 3–4)
 pub async fn create(redis: &Redis, account_id: &str) -> Result<String> {
     let token = random_hex(32);
     redis
@@ -43,7 +46,6 @@ pub fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// `Set-Cookie` value for a new website-mode session.
-#[allow(dead_code)] // called by email/Discord login (changes 3–4)
 pub fn session_cookie(token: &str) -> HeaderValue {
     let max_age = keys::SESSION_TTL_SECS;
     let cookie =
@@ -54,6 +56,23 @@ pub fn session_cookie(token: &str) -> HeaderValue {
 /// `Set-Cookie` value that removes the session cookie.
 pub fn clear_session_cookie() -> HeaderValue {
     HeaderValue::from_static("session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0")
+}
+
+/// `Set-Cookie` value for the pending-login binding (see
+/// [`PENDING_LOGIN_COOKIE`]); lives as long as the login code it guards.
+pub fn pending_login_cookie(value: &str) -> HeaderValue {
+    let max_age = keys::LOGIN_CODE_TTL_SECS;
+    let cookie = format!(
+        "{PENDING_LOGIN_COOKIE}={value}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/email; Max-Age={max_age}"
+    );
+    HeaderValue::from_str(&cookie).expect("pending values are hex, so always a valid header")
+}
+
+/// `Set-Cookie` value that removes the pending-login cookie.
+pub fn clear_pending_login_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "pending_login=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/email; Max-Age=0",
+    )
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 [build]
-dist = "dist"
+dist = "../../build/dist"
 # Discord's activity proxy rewrites URLs inside served JS, which breaks SRI hashes.
 no_sri = true
 

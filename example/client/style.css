@@ -1,0 +1,31 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+main {
+  max-width: 32rem;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+
+.webapp-login {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+}
+
+.webapp-error {
+  color: #c62828;
+}
+
+.webapp-status,
+.account {
+  opacity: 0.7;
+}

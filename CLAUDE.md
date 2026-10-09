@@ -72,7 +72,7 @@ cargo run -p example-server
 # Run the example client dev server (from example/client); serves :8080 and proxies /api and /health to :3000
 trunk serve
 
-# Production client build (from example/client), outputs example/client/dist/
+# Production client build (from example/client), outputs <repo>/build/dist/
 trunk build --release
 ```
 
@@ -86,9 +86,20 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 - `cargo run -p example-server` runs the backend (axum, native Rust) on `:3000`: `/health` and `/api/*`. Restart it after server code changes.
 - `trunk serve` runs the frontend dev server on `:8080`. It compiles the client to WASM, serves the page, rebuilds when client code changes (refresh the browser yourself, since auto-reload is disabled for Discord), and proxies `/api` and `/health` to `:3000`, so the browser sees one origin.
 
-**Production runs only the server.** `trunk build --release` produces `dist/` once, and the axum server serves both `dist/` and `/api/*`. Serving `dist/` is added in change 5.
+**Production runs only the server.** `trunk build --release` produces `build/dist/` once, and the axum server serves both the client (`STATIC_DIR`, default `build/dist`, via `tower-http` `ServeDir` as the fallback route) and `/api/*`. To check this locally, run `trunk build --release`, then `cargo run -p example-server`, and open `http://localhost:3000`.
 
-**Discord** just loads a URL. In dev, point the Cloudflare tunnel at `:8080`. In production, point the URL mapping at the deployed server.
+**Dropbox:** this repo lives in Dropbox, which locks freshly built files and makes trunk fail intermittently (`os error 32/5`). So trunk outputs to `<repo>/build/dist` (gitignored), and `build/` is marked Dropbox-ignored. That's a per-machine flag; set it once after cloning (it persists because nothing deletes `build/` itself):
+`New-Item -ItemType Directory -Force build | Out-Null; Set-Content -Path build -Stream com.dropbox.ignored -Value 1` (PowerShell, at the repo root). Cargo's target dir is `CARGO_TARGET_DIR`, outside Dropbox on this machine.
+
+**Discord app setup** (once per app, in the Developer Portal): enable Activities; set the Activity URL Mapping Root `/` → the tunnel or production hostname (no `https://`); and under **OAuth2 → Redirects** add the placeholder `https://127.0.0.1`. Discord requires a registered redirect URI even though the Embedded App SDK never uses it. Without one, `authorize` fails with `invalid_request: Missing "redirect_uri"`. Copy the Client ID and Secret into `.env`.
+
+**Discord activity dev loop** (Discord app "webapp example", Root Mapping `/` → `webapp-dev.fadetovoid.win`):
+1. Run `cargo run -p example-server` and `trunk serve` (as above).
+2. Run `cloudflared tunnel run --url http://localhost:8080 webapp-dev`. It's a named tunnel, so the hostname is fixed and the URL mapping never changes. It stays in the foreground; Ctrl+C stops it.
+3. Launch the activity in Discord (it's visible to the app's owner and testers).
+4. Optional: to open dev tools in Discord desktop (Ctrl+Shift+I), add `"DANGEROUS_ENABLE_DEVTOOLS_ONLY_ENABLE_IF_YOU_KNOW_WHAT_YOURE_DOING": true` to `%APPDATA%\Discord\settings.json`.
+
+In production, the URL mapping points at the deployed server (change 6).
 
 Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` returns JSON; `GET /api/auth/me` and `GET /api/hello` return 401 without a session.
 
@@ -113,13 +124,21 @@ Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` r
 
 The emailed link is `{PUBLIC_BASE_URL}/?login_code=<code>`. The SPA reads the code and calls `confirm`. Email delivery is set by env: Resend if `RESEND_API_KEY` is set, else console output if `DEV_MODE=1`, else disabled. The example server serves with connect info so the rate limit sees the real peer IP locally (`Fly-Client-IP` on Fly).
 
+## Framework API Conventions (`webapp-client`)
+
+- Wrap the signed-in part of the app in `<AuthGate>`. It detects the mode (`frame_id` query param → Discord), runs the matching sign-in flow, and renders its children only once signed in.
+- Inside it, `use_auth()` returns `AuthContext {account: Signal<Account>, logout: Callback<()>}`.
+- Call the app's own endpoints with `api_get::<T>(path)` / `api_post::<B, T>(path, &body)`. They attach the Discord-mode bearer token, always send JSON (satisfying the CSRF rule), and map an empty/204 body to `null`, so `T = ()` works. Errors are `FetchError::Status(u16)` or `Network(String)`.
+- `authenticate_discord_sdk()` is for apps that need Discord SDK commands beyond sign-in.
+- The sign-in views are unstyled semantic HTML with `webapp-*` classes (`webapp-login`, `webapp-error`, `webapp-status`); apps style them.
+
 ## Discord Activity: Known Quirks
 
 The Discord activity proxy (`{clientId}.discordsays.com`) rewrites URLs in served files and enforces a strict CSP. These choices exist because of that:
 
 - **`no_sri = true`** in `Trunk.toml`: the proxy rewrites URLs inside JS, which breaks trunk's SRI hashes.
 - **`no_autoreload = true`** in `Trunk.toml`: trunk's reload WebSocket is blocked by the CSP.
-- **Vendored Discord SDK:** CSP blocks external URLs that aren't configured URL mappings, so the SDK is a pinned, pre-bundled ESM file inlined into `index.html` by trunk, never loaded from a CDN.
+- **Vendored Discord SDK:** CSP blocks external URLs that aren't configured URL mappings, so the SDK is never loaded from a CDN. `crates/webapp-client/js/discord.js` is `bridge.src.js` + `@discord/embedded-app-sdk@2.5.0`, bundled into one committed file (regeneration steps in `js/README.md`). It's loaded as a **wasm-bindgen snippet** (`#[wasm_bindgen(module = "/js/discord.js")]`): copied into `dist/snippets/…` and imported with a relative path, so apps get it through the crate dependency with no `index.html` changes.
 - **Bearer token, not cookies, in activity mode:** cookies through the proxy require `SameSite=None; Partitioned` and are unreliable. The activity re-authorizes on each launch (`prompt: "none"`) and keeps its token in memory.
 - **Mode detection:** a `frame_id` query param (added by Discord at launch) means activity mode.
 - **Server-side verification:** never trust identity data from the Discord client; the server does the code exchange and the `users/@me` lookup itself.

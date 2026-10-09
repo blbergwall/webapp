@@ -5,4 +5,5 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+webapp-client.workspace = true
 leptos.workspace = true

@@ -23,7 +23,7 @@ use crate::{
     session::{self, PENDING_LOGIN_COOKIE},
 };
 
-/// Value of an `LC<code>` record.
+/// Value of an `FL<code>` record.
 #[derive(Serialize, Deserialize)]
 struct LoginCode {
     email: String,

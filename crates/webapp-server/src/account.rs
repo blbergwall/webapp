@@ -15,7 +15,7 @@ pub async fn get(redis: &Redis, account_id: &str) -> Result<Option<Account>> {
     Ok(Some(account))
 }
 
-/// Returns the account that `identity_key` (e.g. `IE<email>`, unprefixed)
+/// Returns the account that `identity_key` (e.g. `FE<email>`, unprefixed)
 /// points to, creating one with `make_account(new_id, created)` if the
 /// identity is new.
 ///

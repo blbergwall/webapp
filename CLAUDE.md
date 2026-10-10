@@ -89,7 +89,7 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 **Production runs only the server.** `trunk build --release` produces `build/dist/` once, and the axum server serves both the client (`STATIC_DIR`, default `build/dist`, via `tower-http` `ServeDir` as the fallback route) and `/api/*`. To check this locally, run `trunk build --release`, then `cargo run -p example-server`, and open `http://localhost:3000`.
 
 **Dropbox:** this repo lives in Dropbox, which locks freshly built files and makes trunk fail intermittently (`os error 32/5`). So trunk outputs to `<repo>/build/dist` (gitignored), and `build/` is marked Dropbox-ignored. That's a per-machine flag; set it once after cloning (it persists because nothing deletes `build/` itself):
-`New-Item -ItemType Directory -Force build | Out-Null; Set-Content -Path build -Stream com.dropbox.ignored -Value 1` (PowerShell, at the repo root). Cargo's target dir is `CARGO_TARGET_DIR`, outside Dropbox on this machine.
+`New-Item -ItemType Directory -Force build | Out-Null; Set-Content -Path build -Stream com.dropbox.ignored -Value 1` (PowerShell, at the repo root). Cargo's target dir is `CARGO_TARGET_DIR`, outside Dropbox on this machine. If `os error 32` locks still occur with `build/` ignored, Windows Defender's real-time scanning of new `.js`/`.wasm` files is the likely cause (same fix as in `full-rust`): run `Add-MpPreference -ExclusionPath "<repo>uild"` in an admin PowerShell. To recover from a failed build, stop trunk, delete `build/dist`, and rerun.
 
 **Discord app setup** (once per app, in the Developer Portal): enable Activities; set the Activity URL Mapping Root `/` → the tunnel or production hostname (no `https://`); and under **OAuth2 → Redirects** add the placeholder `https://127.0.0.1`. Discord requires a registered redirect URI even though the Embedded App SDK never uses it. Without one, `authorize` fails with `invalid_request: Missing "redirect_uri"`. Copy the Client ID and Secret into `.env`.
 
@@ -103,7 +103,13 @@ In production, the URL mapping points at the deployed server (change 6).
 
 Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` returns JSON; `GET /api/auth/me` and `GET /api/hello` return 401 without a session.
 
+## Implementation Guide
+
+`docs/implementation-guide.md` is the document **applications** read: how to add the framework, wire the server and client, the Redis key ownership rules, and the conventions apps must follow. Keep it in sync whenever the public API, conventions, or framework record prefixes change.
+
 ## Deployment
+
+**Never deploy unless the user explicitly asks for a deploy in that moment.** Do not run `fly deploy`, `fly scale`, `fly secrets` or any other command that changes the Fly app as part of a change, a plan, or a fix, even when production would otherwise be out of date. Say that a deploy is needed, and let the user decide. Approval for one deploy doesn't carry over to later ones.
 
 The example app is deployed to Fly.io as `webapp-example` (`https://webapp-example.fly.dev`), using the repo-root `Dockerfile` (trunk + server, multi-stage), `.dockerignore` and `fly.toml`. Deploy with `fly deploy --ha=false` from the repo root. The app runs one `shared-cpu-1x` / 256 MB machine (the smallest size) that auto-stops when idle. The deploy builds on Fly's remote builder, so Docker isn't needed locally. Secrets come from `.env` via `fly secrets import`; only non-secret settings live in `fly.toml`. Production shares the dev Upstash DB (no key prefix). Full steps, Discord portal setup, env var reference and how to adapt this for a new app: `docs/deploy.md`.
 
@@ -113,7 +119,7 @@ The example app is deployed to Fly.io as `webapp-example` (`https://webapp-examp
 - `Auth(account)` on a handler means a session is required. The bearer header wins over the cookie, and an invalid bearer is a 401 with no cookie fallback.
 - **Session TTLs (sliding; the `GETEX` read also refreshes, in one command):** website (cookie) sessions last 90 days; Discord sessions last 24 hours. Discord tokens are prefixed `dc_`, which selects the TTL without an extra lookup. Every activity launch signs in afresh and its in-memory token dies with the activity, so the short TTL clears abandoned sessions.
 - **CSRF rule (enforced in `Auth`):** cookie-authenticated requests with a non-GET/HEAD/OPTIONS method must send `Content-Type: application/json`, otherwise 403. Clients must send JSON (even `{}`) on every write.
-- Redis keys: the framework's 2-letter prefixes live in `keys.rs`; apps must not reuse them. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
+- **Redis record prefixes (2 characters):** `F*` is reserved for the framework (all of them live in `keys.rs`, listed in `FRAMEWORK_PREFIXES`; a unit test enforces 2 chars, `F`-first, unique). `A*`–`E*` are reserved for applications. Other first letters are unassigned (e.g. for reusable crates). Any new framework record type must use an unused `F?` code and be added to `FRAMEWORK_PREFIXES` and to the table in `docs/implementation-guide.md`. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
 - `ApiError::Internal` logs the error and returns a generic 500. Never put error details in responses.
 
 ## Auth API Contract

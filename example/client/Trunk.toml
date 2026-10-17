@@ -11,5 +11,11 @@ no_autoreload = true
 [[proxy]]
 backend = "http://127.0.0.1:3000/api"
 
+# WebSocket routes need their own `ws = true` entry; the plain /api proxy
+# doesn't forward upgrades.
+[[proxy]]
+backend = "ws://127.0.0.1:3000/api/ws"
+ws = true
+
 [[proxy]]
 backend = "http://127.0.0.1:3000/health"

@@ -22,3 +22,14 @@ web-sys = { workspace = true, features = [
     "UrlSearchParams",
     "Window",
 ] }
+
+[features]
+# Authenticated WebSocket helper (`connect_ws`); pairs with webapp-server's
+# `ws` feature.
+ws = [
+    "webapp-common/ws",
+    "web-sys/CloseEvent",
+    "web-sys/Event",
+    "web-sys/MessageEvent",
+    "web-sys/WebSocket",
+]

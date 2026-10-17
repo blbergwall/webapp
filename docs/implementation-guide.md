@@ -73,7 +73,66 @@ fn Home() -> impl IntoView {
 - `Trunk.toml` must keep `no_sri = true` and `no_autoreload = true` (Discord's proxy and CSP require them). It should output to `build/dist` and proxy `/api` to the local server. Copy `example/client/Trunk.toml`.
 - The Discord SDK ships inside `webapp-client` (no `index.html` changes, no CDN). Apps that need SDK commands beyond sign-in call `authenticate_discord_sdk()` after sign-in.
 
-## 4. Database keys
+## 4. WebSockets (optional `ws` feature)
+
+Realtime push in both modes, behind a Cargo feature that is off by default. Without it, nothing below is compiled and there is no extra endpoint or dependency. Enable it on both crates (and on the app's `axum`, for `axum::extract::ws`):
+
+```toml
+# server
+webapp-server = { ..., features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
+# client
+webapp-client = { ..., features = ["ws"] }
+```
+
+**How auth works:** a browser `WebSocket` can't send an `Authorization` header, and a cookie-authenticated upgrade is open to cross-site WebSocket hijacking. So the client first calls `POST /api/auth/ws-ticket` (normal `Auth`, either mode, CSRF rule included). That returns a random single-use ticket, valid for 30 s, which the client passes as `?ticket=` on the upgrade. Tickets are limited to **20 per account per minute** (429 beyond that).
+
+**Server:**
+
+```rust
+use axum::{extract::ws::{Message, WebSocket, WebSocketUpgrade}, response::Response};
+use webapp_server::{WsAuth, webapp_common::Account};
+
+let app = Router::new()
+    .route("/api/ws", get(ws))
+    .merge(webapp_server::auth_router())
+    .merge(webapp_server::ws_router()) // POST /api/auth/ws-ticket
+    /* ... */;
+
+// `WsAuth` goes BEFORE `WebSocketUpgrade`: no valid ticket = 401, no upgrade.
+async fn ws(WsAuth(account): WsAuth, upgrade: WebSocketUpgrade) -> Response {
+    upgrade.on_upgrade(move |socket| handle(socket, account))
+}
+```
+
+- **Ignore empty text messages.** They are the client helper's keepalive (sent every 30 s, because Fly.io closes connections that are idle for about 60 s). Don't use `""` as a real message.
+- A socket is authenticated **once, at connect**. Signing out doesn't close sockets that are already open. If that matters, close them in the app.
+- Use the account from `WsAuth`. Don't trust identity data sent over the socket.
+
+**Client:**
+
+```rust
+use webapp_client::{WsStatus, connect_ws};
+
+// Inside <AuthGate> (a session is needed to get a ticket):
+let ws = connect_ws("/api/ws", move |text: String| { /* handle a message */ });
+ws.send("hello");       // false (and dropped) unless the socket is open
+ws.status.get();        // WsStatus::Connecting | Open | Closed
+```
+
+- The URL is same-origin (`ws(s)://{location.host}{path}`), so it works through the Discord proxy unchanged.
+- It reconnects automatically with a new ticket each time. The backoff runs from 1 s up to 30 s with jitter, resets once a connection has stayed open for 10 s, and waits 30 s after a 429. Messages aren't queued while disconnected, so after reconnecting the server should send whatever state the client needs.
+- A 401 on the ticket request (session gone) stops it (`WsStatus::Closed`). It also stops for good when the calling component is cleaned up, e.g. on sign-out.
+- `WsConnection` is `Copy`. Messages arrive through the callback (not a signal), so none are lost when several arrive at once.
+- **Local dev:** trunk's plain `/api` proxy doesn't forward WebSocket upgrades. Add a `ws = true` entry per WebSocket route to `Trunk.toml` (see `example/client/Trunk.toml`):
+
+  ```toml
+  [[proxy]]
+  backend = "ws://127.0.0.1:3000/api/ws"
+  ws = true
+  ```
+
+## 5. Database keys
 
 Every record in Redis starts with a **2-character type prefix**, e.g. `FA<account_id>`. Prefixes are owned by first letter, so the framework and apps can add record types independently without colliding:
 
@@ -93,11 +152,13 @@ Codes the framework uses today (from `crates/webapp-server/src/keys.rs`; new fra
 | `FS<token>` | Session → `account_id` (sliding TTL) |
 | `FL<code>` | One-time email login code |
 | `FR<ip>` | Email rate-limit gate |
+| `FW<ticket>` | Single-use WebSocket ticket → `Account` (30 s TTL; `ws` feature) |
+| `FT<account_id>` | WebSocket ticket rate-limit counter (`ws` feature) |
 
 Each app should keep its own prefixes in one documented module (like the framework's `keys.rs`), as the single place to check before choosing a new one.
 
 **Accessing Redis from an app:** use `webapp.redis()` (`Redis`). Its helpers (`get`, `getex`, `getdel`, `set`, `set_ex`, `set_nx_ex`, `del`) take **unprefixed** keys and add the optional `REDIS_KEY_PREFIX` namespace themselves. For any other command, build each key with `redis.key("AW123")` and pass it to `redis.command(&[...])`. The namespace prefix sits in front of the whole key (e.g. `myapp:AW123`) and is separate from the 2-character record prefix.
 
-## 5. Configuration and deployment
+## 6. Configuration and deployment
 
 All configuration comes from environment variables: `.env` locally (copy `.env.example`), and Fly secrets plus `fly.toml` `[env]` in production. See [`deploy.md`](deploy.md) for the variable reference, the Discord Developer Portal setup (including the required placeholder redirect URI), and how to adapt the `Dockerfile` / `fly.toml` for a new app.

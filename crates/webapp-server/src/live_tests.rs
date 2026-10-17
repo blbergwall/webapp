@@ -216,3 +216,72 @@ async fn discord_account_keyed_by_discord_id() {
 
     cleanup(&app).await;
 }
+
+#[cfg(feature = "ws")]
+#[tokio::test]
+#[ignore]
+async fn ws_ticket_single_use_expiry_and_rate_limit() {
+    use axum::{
+        Json,
+        body::Body,
+        extract::{FromRequestParts, State},
+        http::{Request, StatusCode},
+        response::IntoResponse,
+    };
+
+    use crate::{Auth, WsAuth, ws};
+
+    let app = test_app();
+    let redis = app.redis();
+    let account = account::find_or_create_by_email(redis, "ws@example.com").await.unwrap();
+
+    let issue = || {
+        let app = app.clone();
+        let account = account.clone();
+        async move { ws::ticket(State(app), Auth(account)).await }
+    };
+    let upgrade = |ticket: String| {
+        let app = app.clone();
+        async move {
+            let uri = format!("/api/ws?ticket={ticket}");
+            let (mut parts, _) = Request::get(uri).body(Body::empty()).unwrap().into_parts();
+            WsAuth::from_request_parts(&mut parts, &app).await
+        }
+    };
+    let status = |result: Result<WsAuth, crate::ApiError>| match result {
+        Ok(_) => StatusCode::OK,
+        Err(err) => err.into_response().status(),
+    };
+
+    // A ticket resolves to the requesting account exactly once.
+    let Json(issued) = issue().await.unwrap();
+    let ticket_key = redis.key(&format!("{}{}", keys::WS_TICKET, issued.ticket));
+    let ttl = redis.command(&["TTL", &ticket_key]).await.unwrap().as_i64().unwrap();
+    assert!(ttl > 0 && ttl <= keys::WS_TICKET_TTL_SECS as i64, "ttl was {ttl}");
+    let WsAuth(authed) = upgrade(issued.ticket.clone()).await.unwrap();
+    assert_eq!(authed, account);
+    assert_eq!(status(upgrade(issued.ticket).await), StatusCode::UNAUTHORIZED);
+
+    // A well-formed ticket that was never issued is rejected.
+    assert_eq!(status(upgrade(random_hex(32)).await), StatusCode::UNAUTHORIZED);
+
+    // An expired ticket is rejected.
+    let Json(issued) = issue().await.unwrap();
+    let ticket_key = redis.key(&format!("{}{}", keys::WS_TICKET, issued.ticket));
+    redis.command(&["PEXPIRE", &ticket_key, "1"]).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(status(upgrade(issued.ticket).await), StatusCode::UNAUTHORIZED);
+
+    // Rate limit: 2 tickets so far; the rest of the window's allowance
+    // succeeds, then 429. The counter carries the window's TTL.
+    for _ in 2..keys::WS_TICKET_RATE_LIMIT {
+        let _ = issue().await.unwrap();
+    }
+    let over = issue().await.expect_err("over the limit");
+    assert_eq!(over.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    let counter = redis.key(&format!("{}{}", keys::WS_TICKET_RATE, account.id));
+    let ttl = redis.command(&["TTL", &counter]).await.unwrap().as_i64().unwrap();
+    assert!(ttl > 0 && ttl <= keys::WS_TICKET_RATE_WINDOW_SECS as i64, "ttl was {ttl}");
+
+    cleanup(&app).await;
+}

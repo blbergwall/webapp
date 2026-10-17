@@ -66,6 +66,11 @@ cargo test
 # Type-check a client crate
 cargo check -p example-client --target wasm32-unknown-unknown
 
+# The optional `ws` feature: check the library crates both without and with it
+cargo check -p webapp-server && cargo test -p webapp-server --features ws
+cargo check -p webapp-client --target wasm32-unknown-unknown
+cargo check -p webapp-client --target wasm32-unknown-unknown --features ws
+
 # Run the example server (workspace root); binds BIND_ADDR, default 127.0.0.1:3000
 cargo run -p example-server
 
@@ -80,7 +85,7 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 
 **Configuration:** copy `.env.example` to `.env` (gitignored) at the repo root and fill it in. The example server loads it with `dotenvy`; the framework itself only reads environment variables (`webapp_server::Config::from_env`). Local dev uses its own Upstash database, separate from other projects.
 
-**Live Redis tests:** `cargo test -p webapp-server -- --ignored` runs the tests in `crates/webapp-server/src/live_tests.rs` against the Upstash DB in `.env`. Each run uses a random key prefix (`webapp-test:<hex>:`) and deletes its keys afterwards. Plain `cargo test` skips them.
+**Live Redis tests:** `cargo test -p webapp-server --features ws -- --ignored` runs the tests in `crates/webapp-server/src/live_tests.rs` against the Upstash DB in `.env`. Each run uses a random key prefix (`webapp-test:<hex>:`) and deletes its keys afterwards. Plain `cargo test` skips them.
 
 **Local dev runs two processes. Open `http://localhost:8080`:**
 - `cargo run -p example-server` runs the backend (axum, native Rust) on `:3000`: `/health` and `/api/*`. Restart it after server code changes.
@@ -101,7 +106,7 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 
 In production, the URL mapping points at the deployed server (change 6).
 
-Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` returns JSON; `GET /api/auth/me` and `GET /api/hello` return 401 without a session.
+Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` returns JSON; `GET /api/auth/me`, `GET /api/hello` and `POST /api/auth/ws-ticket` return 401 without a session. The signed-in example page shows a WebSocket echo demo that should report "Connected".
 
 ## Implementation Guide
 
@@ -121,6 +126,7 @@ The example app is deployed to Fly.io as `webapp-example` (`https://webapp-examp
 - **CSRF rule (enforced in `Auth`):** cookie-authenticated requests with a non-GET/HEAD/OPTIONS method must send `Content-Type: application/json`, otherwise 403. Clients must send JSON (even `{}`) on every write.
 - **Redis record prefixes (2 characters):** `F*` is reserved for the framework (all of them live in `keys.rs`, listed in `FRAMEWORK_PREFIXES`; a unit test enforces 2 chars, `F`-first, unique). `A*`–`E*` are reserved for applications. Other first letters are unassigned (e.g. for reusable crates). Any new framework record type must use an unused `F?` code and be added to `FRAMEWORK_PREFIXES` and to the table in `docs/implementation-guide.md`. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
 - `ApiError::Internal` logs the error and returns a generic 500. Never put error details in responses.
+- **WebSockets (`ws` Cargo feature, off by default on `webapp-server`, `webapp-client` and `webapp-common`):** everything is behind `#[cfg(feature = "ws")]`, so apps without it build with no extra deps or endpoints. Apps `merge(webapp_server::ws_router())` (the ticket endpoint, kept out of `auth_router()` so it's visible in the app) and put `WsAuth(account)` **before** `WebSocketUpgrade` on their WS routes. `WsAuth` consumes `?ticket=` with `GETDEL` (ticket = `FW`, 30 s, stores the `Account` JSON, so it's one Redis call). Tickets are rate-limited to 20 per account per 60 s (`FT` counter, one atomic `EVAL`). A socket authenticates once at connect. App socket handlers must ignore empty text messages (the client's keepalive).
 
 ## Auth API Contract
 
@@ -132,6 +138,7 @@ The example app is deployed to Fly.io as `webapp-example` (`https://webapp-examp
 | `POST /api/auth/discord {code}` | 200 `{token, discord_access_token, account}` (bearer token, no cookie) | 400 empty code, 401 Discord rejected the code (`invalid_grant`), 404 Discord not configured, 500 other Discord failures incl. bad credentials (logged) |
 | `POST /api/auth/email/start {email}` | 204, sets `pending_login` cookie | 400 bad email, 429 rate-limited (2 min per IP), 404 email login disabled |
 | `POST /api/auth/email/confirm {code, auto}` | 200 `Account`, sets session cookie, clears `pending_login` | 410 code expired/used; 409 `auto` refused (not this browser, so the code is **not** consumed: show a "Finish signing in" button and retry with `auto: false`) |
+| `POST /api/auth/ws-ticket` (`ws` feature, `ws_router()`) | 200 `{ticket}` (single-use, 30 s) | 401, 403 (CSRF), 429 (over 20 per account per minute) |
 
 The emailed link is `{PUBLIC_BASE_URL}/?login_code=<code>`. The SPA reads the code and calls `confirm`. Email delivery is set by env: Resend if `RESEND_API_KEY` is set, else console output if `DEV_MODE=1`, else disabled. The example server serves with connect info so the rate limit sees the real peer IP locally (`Fly-Client-IP` on Fly).
 
@@ -140,6 +147,7 @@ The emailed link is `{PUBLIC_BASE_URL}/?login_code=<code>`. The SPA reads the co
 - Wrap the signed-in part of the app in `<AuthGate>`. It detects the mode (`frame_id` query param → Discord), runs the matching sign-in flow, and renders its children only once signed in.
 - Inside it, `use_auth()` returns `AuthContext {account: Signal<Account>, logout: Callback<()>}`.
 - Call the app's own endpoints with `api_get::<T>(path)` / `api_post::<B, T>(path, &body)`. They attach the Discord-mode bearer token, always send JSON (satisfying the CSRF rule), and map an empty/204 body to `null`, so `T = ()` works. Errors are `FetchError::Status(u16)` or `Network(String)`.
+- `connect_ws(path, on_message)` (`ws` feature) opens an authenticated same-origin WebSocket and returns a `Copy` `WsConnection {status: Signal<WsStatus>, send(&str) -> bool}`. It fetches a fresh ticket per attempt, reconnects with backoff (1 s up to 30 s with jitter, reset after 10 s stable, 30 s after a 429), stops on a 401 or when its owner is cleaned up, and sends `""` every 30 s as a keepalive under Fly's idle timeout. In dev, each WS route needs a `ws = true` proxy entry in `Trunk.toml`.
 - `authenticate_discord_sdk()` is for apps that need Discord SDK commands beyond sign-in.
 - The sign-in views are unstyled semantic HTML with `webapp-*` classes (`webapp-login`, `webapp-error`, `webapp-status`); apps style them.
 

@@ -49,6 +49,22 @@ pub const RATE_LIMIT: &str = "FR";
 /// How long an `FR<ip>` gate blocks further login emails from that IP.
 pub const RATE_LIMIT_TTL_SECS: u64 = 2 * 60;
 
+/// `FW<ticket>` — single-use WebSocket ticket (`ws` feature): JSON
+/// `webapp_common::Account` of the session that requested it. Consumed with
+/// `GETDEL` by `WsAuth`.
+pub const WS_TICKET: &str = "FW";
+/// How long an unused WebSocket ticket remains valid.
+pub const WS_TICKET_TTL_SECS: u64 = 30;
+
+/// `FT<account_id>` — WebSocket ticket rate-limit counter (`ws` feature):
+/// tickets issued to the account in the current window. `INCR`ed, with the
+/// window's TTL set on the first hit, in one `EVAL`.
+pub const WS_TICKET_RATE: &str = "FT";
+/// Length of a ticket rate-limit window.
+pub const WS_TICKET_RATE_WINDOW_SECS: u64 = 60;
+/// Tickets one account may request per window (429 beyond that).
+pub const WS_TICKET_RATE_LIMIT: i64 = 20;
+
 /// Every record prefix the framework uses. Add new ones here too, so the
 /// ownership test covers them.
 pub const FRAMEWORK_PREFIXES: &[&str] = &[
@@ -58,6 +74,8 @@ pub const FRAMEWORK_PREFIXES: &[&str] = &[
     SESSION,
     LOGIN_CODE,
     RATE_LIMIT,
+    WS_TICKET,
+    WS_TICKET_RATE,
 ];
 
 #[cfg(test)]

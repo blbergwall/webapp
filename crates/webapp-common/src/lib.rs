@@ -59,3 +59,11 @@ pub struct EmailConfirmRequest {
     /// `false`.
     pub auto: bool,
 }
+
+/// Response body of `POST /api/auth/ws-ticket`: a single-use ticket to pass
+/// as `?ticket=` on a WebSocket upgrade, valid for about 30 seconds.
+#[cfg(feature = "ws")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WsTicketResponse {
+    pub ticket: String,
+}

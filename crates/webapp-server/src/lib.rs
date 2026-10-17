@@ -26,6 +26,8 @@ mod live_tests;
 mod random;
 mod redis;
 mod session;
+#[cfg(feature = "ws")]
+mod ws;
 
 use std::sync::Arc;
 
@@ -39,6 +41,9 @@ pub use auth::Auth;
 pub use config::{Config, DiscordConfig, EmailDelivery};
 pub use error::ApiError;
 pub use redis::Redis;
+pub use webapp_common;
+#[cfg(feature = "ws")]
+pub use ws::WsAuth;
 
 /// Handle to the framework's configuration and storage. Cheap to clone.
 #[derive(Clone)]
@@ -92,4 +97,16 @@ where
         .route("/api/auth/discord", post(discord::login))
         .route("/api/auth/email/start", post(email::start))
         .route("/api/auth/email/confirm", post(email::confirm))
+}
+
+/// The WebSocket ticket endpoint (`POST /api/auth/ws-ticket`, `ws` feature).
+/// Merge it alongside `auth_router()`, then authenticate the app's own
+/// WebSocket routes with [`WsAuth`].
+#[cfg(feature = "ws")]
+pub fn ws_router<S>() -> Router<S>
+where
+    WebApp: FromRef<S>,
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new().route("/api/auth/ws-ticket", post(ws::ticket))
 }

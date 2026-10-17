@@ -26,6 +26,16 @@ button {
 }
 
 .webapp-status,
-.account {
+.account,
+.ws-status {
   opacity: 0.7;
+}
+
+.echo form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.echo input {
+  flex: 1;
 }

@@ -5,3 +5,8 @@ edition.workspace = true
 
 [dependencies]
 serde.workspace = true
+
+[features]
+# Types for the WebSocket ticket endpoint; enabled by the server/client `ws`
+# features.
+ws = []

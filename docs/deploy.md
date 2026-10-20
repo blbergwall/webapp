@@ -1,6 +1,6 @@
 # Deploying to Fly.io
 
-How the example app (`webapp-example`) is deployed, and the pattern for apps built on the framework. One Fly app runs one server that serves both the trunk-built client and `/api/*` from a single origin. The same origin works for the plain website and, through Discord's proxy, for the Discord activity.
+How the example app (`webapp-example`) is deployed, and the pattern for apps built on the framework. The example was deployed this way and has since been removed (see **Removing an app**); the files and steps here still deploy it again. One Fly app runs one server that serves both the trunk-built client and `/api/*` from a single origin. The same origin works for the plain website and, through Discord's proxy, for the Discord activity.
 
 ## Files
 
@@ -48,6 +48,20 @@ Check afterwards:
 - `fly secrets import --app webapp-example` (or `fly secrets set NAME=value`): change secrets; this restarts the machines.
 - `fly logs --app webapp-example`: server output, including logged `ApiError::Internal` details.
 - `fly secrets list --app webapp-example`: names and digests only, never values.
+
+## Removing an app
+
+```sh
+fly apps destroy webapp-example
+```
+
+It asks for confirmation (`--yes` skips it) and **can't be undone**. It deletes everything Fly holds for the app: machines, volumes, IPs, certificates, secrets and images. A suspended app with stopped machines costs little, but destroying it frees it up entirely. Check afterwards with `fly apps list`.
+
+Things outside Fly to tidy up:
+- **App name:** Fly app names are global, so the freed name (and its `*.fly.dev` host) can be claimed by someone else. To redeploy later, follow **First deploy**; if the name is taken, change `app` and `PUBLIC_BASE_URL` in `fly.toml`.
+- **Discord:** if the Discord app's Root Mapping points at the removed host, repoint it (e.g. to the dev tunnel) or the activity won't load.
+- **Custom domain:** remove the DNS records created for `fly certs add`.
+- **Redis:** the Upstash data isn't touched. Sessions and tickets expire on their own TTLs; app records stay until deleted (use a distinct `REDIS_KEY_PREFIX` per app to make them easy to find).
 
 ## Custom domain (website mode)
 

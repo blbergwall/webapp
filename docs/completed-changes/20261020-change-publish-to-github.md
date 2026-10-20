@@ -1,6 +1,6 @@
 # Change: Publish to GitHub
 
-**Status:** developed
+**Status:** done
 
 Source: `docs/completed-research/20261020-add-to-github.md` (findings, decisions and the proposed order). Needed by ds's change 5 (deploy to Fly), which switches ds to a pinned git dependency on this repo.
 
@@ -67,3 +67,20 @@ The history rewrite and the push are outward-facing or hard to undo: run them on
 - All file edits from the plan are done. `LICENSE-APACHE` is the official apache.org text (SHA-256 `cfc7749b…3d30`, the canonical file). `THIRD-PARTY-NOTICES` was assembled from each package's license file in a scratch npm install (tslib via `npm pack`). The `discord.js` header line was also corrected: it said "dependencies MIT/Apache-2.0", but `big-integer` is Unlicense and `tslib` is 0BSD.
 - Git Bash `sed -i` turned three CRLF manifests (`Cargo.toml`, `example/*/Cargo.toml`) into LF. CRLF was restored, so the diff is one line per manifest.
 - Build check: `cargo build`, `cargo test` (28 passed, 5 ignored), `cargo test -p webapp-server --features ws`, the wasm `cargo check` of `webapp-client` with and without `ws` and of `example-client`, and `trunk build --release` all pass. `cargo metadata` reports `MIT OR Apache-2.0` for all five packages.
+
+## Publishing Log
+
+- Steps 1–3 approved by the user and done:
+  1. Committed the edits (`5a371d2` before the rewrite).
+  2. Set repo-local `user.email` to the noreply address. `filter-branch --env-filter` rewrote all 11 commits on `master`. Verified: every author and committer email is `727986+blbergwall@users.noreply.github.com`, and every commit's tree and author/committer dates match the pre-rewrite snapshot. `refs/original/` is kept until the GitHub check passes.
+  3. Renamed `master` to `main`. Annotated tag `v0.1.0` (tagger: the noreply address) points at `05cd418`.
+- The user created the public repo `blbergwall/webapp` and pushed `main` and `v0.1.0`.
+- Verified from GitHub:
+  - `git ls-remote origin`: `main` = `05cd418`, `v0.1.0` (annotated) peels to `05cd418`. The API reports the repo as public with default branch `main`.
+  - A scratch project with `webapp-server` and `webapp-client` as `{ git = "https://github.com/blbergwall/webapp", tag = "v0.1.0", features = ["ws"] }` fetched anonymously over HTTPS (libgit2). Its lock records `source = "git+https://github.com/blbergwall/webapp?tag=v0.1.0#05cd418…"` for all three crates. `cargo check` (host) and `cargo check --target wasm32-unknown-unknown -p webapp-client` pass, and the checkout includes `crates/webapp-client/js/`.
+  - GitHub's license detection shows only `Apache-2.0` (it picks one file of the dual license). That's cosmetic, and the README states both.
+- Deleted `refs/original/` after the check passed.
+
+## User Feedback
+
+- The user confirmed the published repo and the verification. No adjustments were requested.

@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Website mode:** passwordless email (magic-link) login, with the session in an HttpOnly cookie.
 - **Discord activity mode:** Discord Embedded App SDK `authorize` → server-side code exchange, with the session token held in WASM memory and sent as `Authorization: Bearer`.
 
-Apps consume the library crates as git dependencies pinned to a tag, and follow the shape of `example/`.
+Apps consume the library crates as git dependencies pinned to a tag, and follow the shape of `example/`. The repo is public at `https://github.com/blbergwall/webapp` (see **Releasing**).
 
 The authoritative "why" behind the architecture is `docs/completed-research/20261009-web-app-framework.md`. The ordered implementation plan is the set of change files in `docs/backlog-changes/` (changes 1–6).
 
@@ -117,6 +117,17 @@ Sanity check after a build: `GET /health` returns `ok`; `GET /api/auth/config` r
 **Never deploy unless the user explicitly asks for a deploy in that moment.** Do not run `fly deploy`, `fly scale`, `fly secrets` or any other command that changes the Fly app as part of a change, a plan, or a fix, even when production would otherwise be out of date. Say that a deploy is needed, and let the user decide. Approval for one deploy doesn't carry over to later ones.
 
 The example app is deployed to Fly.io as `webapp-example` (`https://webapp-example.fly.dev`), using the repo-root `Dockerfile` (trunk + server, multi-stage), `.dockerignore` and `fly.toml`. Deploy with `fly deploy --ha=false` from the repo root. The app runs one `shared-cpu-1x` / 256 MB machine (the smallest size) that auto-stops when idle. The deploy builds on Fly's remote builder, so Docker isn't needed locally. Secrets come from `.env` via `fly secrets import`; only non-secret settings live in `fly.toml`. Production shares the dev Upstash DB (no key prefix). Full steps, Discord portal setup, env var reference and how to adapt this for a new app: `docs/deploy.md`.
+
+## Releasing
+
+The repo is public on GitHub: `https://github.com/blbergwall/webapp`, default branch `main`, remote `origin` over **HTTPS**. The ssh bundled with this machine's git is broken (missing `msys-gssapi-3.dll`). Pushes authenticate with a fine-grained personal access token stored by the `wincred` credential helper. A push that prompts for credentials must run in the user's own terminal. Commits use the GitHub noreply address (repo-local `user.email = 727986+blbergwall@users.noreply.github.com`), so no personal email is published.
+
+**Pushing is outward-facing: only push or tag when the user asks.** Apps pin a release tag (`webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "vX.Y.Z" }`), so a release is:
+1. Commit the changes, and bump `version` in the root `[workspace.package]` to match the new tag.
+2. `git tag -a vX.Y.Z -m "vX.Y.Z"`, then `git push origin main vX.Y.Z`.
+3. In each app: change `tag` and run `cargo update -p webapp-server -p webapp-client`.
+
+**Tags are immutable once pushed:** never move or delete one (Cargo and apps' lock files expect a tag to keep pointing at the same commit). A fix is a new patch version. The repo is licensed `MIT OR Apache-2.0`. The vendored Discord SDK's license texts are in `crates/webapp-client/js/THIRD-PARTY-NOTICES`.
 
 ## Framework API Conventions (`webapp-server`)
 

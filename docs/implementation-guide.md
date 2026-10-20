@@ -14,15 +14,21 @@ Pick a dependency style:
 |---|---|---|
 | Local path | `webapp-server = { path = "../webapp/crates/webapp-server" }` | Developing the app and the framework together; always the current working copy, no version pinning. |
 | Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.1.0" }` | Local builds pinned to a tagged, committed version. |
-| Git host, pinned | `webapp-server = { git = "https://github.com/<owner>/webapp", tag = "v0.1.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
+| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.1.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
+
+The framework is published at `https://github.com/blbergwall/webapp` (public, so builds fetch it without credentials). Tags are `vX.Y.Z` and never move once pushed. To pick up a new release, change `tag` on both dependencies and run `cargo update -p webapp-server -p webapp-client`.
 
 To deploy from a git host but develop against your local copy, keep the git-host dependency and add a **git-ignored** `.cargo/config.toml` to the app:
 
 ```toml
-[patch."https://github.com/<owner>/webapp"]
+[patch."https://github.com/blbergwall/webapp"]
 webapp-server = { path = "../webapp/crates/webapp-server" }
 webapp-client = { path = "../webapp/crates/webapp-client" }
 ```
+
+With the patch:
+- **Add `.cargo` to the app's `.dockerignore`** (the template already lists it). `fly deploy` uploads the working directory, including git-ignored files, and a patch path outside the build context fails the build.
+- `Cargo.lock` records the patched crates as path packages, with no git commit. The `tag` in `Cargo.toml` is the pin. The Docker build, which has no patch, re-resolves them to the tag. So don't add `--locked` to the Dockerfile's `cargo build`, or that re-resolve fails.
 
 Use the same `axum` (0.8) and `leptos` (0.8, `csr`) major versions as the framework.
 

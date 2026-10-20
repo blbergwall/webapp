@@ -6,3 +6,6 @@
 build
 target
 docs
+# A local `[patch]` to ../webapp (see docs/implementation-guide.md) points
+# outside the build context and would break the build.
+.cargo

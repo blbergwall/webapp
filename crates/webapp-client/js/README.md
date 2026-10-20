@@ -18,3 +18,9 @@ npx esbuild bridge.src.js --bundle --format=esm --minify --target=es2020 --legal
 
 Prepend the 3-line `// GENERATED` header (update the version), write the
 result to `discord.js`, and update the version here and in `CLAUDE.md`.
+
+`THIRD-PARTY-NOTICES` holds the license texts for the SDK and the libraries it
+ships pre-bundled (`node_modules/@discord/embedded-app-sdk/output/lib/`). The
+sources have no legal comments, so esbuild can't collect them. When upgrading
+the SDK, compare that directory's library list with the notices file and add or
+remove entries, copying each package's own license file.

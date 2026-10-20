@@ -7,7 +7,7 @@ How the example app (`webapp-example`) is deployed, and the pattern for apps bui
 | File | Purpose |
 |---|---|
 | `Dockerfile` | Multi-stage build. The builder installs a pinned, checksum-verified trunk, runs `trunk build --release` (outputs `build/dist`), then `cargo build --release -p example-server`. The runtime image (`debian:bookworm-slim`) holds only the server binary and the client files in `/app/dist`. |
-| `.dockerignore` | Keeps `.env*` (secrets), `.git`, `build`, `target` and `docs` out of the build context. |
+| `.dockerignore` | Keeps `.env*` (secrets), `.git`, `build`, `target`, `docs` and `.cargo` (a local path patch) out of the build context. |
 | `fly.toml` | App name, region, non-secret env vars (`[env]`), HTTP service with auto-stop, and a `/health` check. |
 
 `BIND_ADDR=0.0.0.0:8080` and `STATIC_DIR=/app/dist` are set in the image. The email rate limit keys on Fly's `Fly-Client-IP` header automatically.
@@ -90,4 +90,5 @@ Once per Discord application, in the [Developer Portal](https://discord.com/deve
 1. Copy `Dockerfile`, `.dockerignore` and `fly.toml` into the app repo's root.
 2. In `Dockerfile`, replace `example/client` and `example-server` (both the build and `COPY` lines) with the app's client directory and server package name. Keep its `Trunk.toml` outputting to `build/dist`, or change the `COPY --from=builder` path to match.
 3. In `fly.toml`, set `app`, `primary_region`, `APP_NAME` and `PUBLIC_BASE_URL`.
-4. Follow **First deploy** and **Discord app setup** above with the new app's names.
+4. Depend on the framework through its GitHub git dependency pinned to a tag, not a path (implementation guide §1). The build only sees the app's folder. If you develop against a local copy via a `.cargo/config.toml` patch, keep `.cargo` in `.dockerignore`.
+5. Follow **First deploy** and **Discord app setup** above with the new app's names.

@@ -13,8 +13,8 @@ Pick a dependency style:
 | Style | `Cargo.toml` | When |
 |---|---|---|
 | Local path | `webapp-server = { path = "../webapp/crates/webapp-server" }` | Developing the app and the framework together; always the current working copy, no version pinning. |
-| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.3.0" }` | Local builds pinned to a tagged, committed version. |
-| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.3.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
+| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.4.0" }` | Local builds pinned to a tagged, committed version. |
+| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.4.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
 
 The framework is published at `https://github.com/blbergwall/webapp` (public, so builds fetch it without credentials). Tags are `vX.Y.Z` and never move once pushed. To pick up a new release, change `tag` on both dependencies and run `cargo update -p webapp-server -p webapp-client`.
 
@@ -62,8 +62,10 @@ async fn list_things(Auth(account): Auth) -> Result<Json<Vec<Thing>>, ApiError> 
 - **Errors:** return `ApiError`. Any `anyhow::Error` converts with `?` into a logged, generic 500, so details never reach the client. The other variants map to 400/401/403/404/409/410/429.
 - **CSRF rule:** a cookie-authenticated request with a method other than GET/HEAD/OPTIONS must send `Content-Type: application/json`, or `Auth` rejects it with 403. Design write endpoints to take JSON. The client helpers always send it.
 - **Sessions:** website sessions are a 90-day sliding cookie. (Discord activity sessions are bearer tokens; see §4.)
-- **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email or Discord ID. An email sign-in and a Discord sign-in are separate accounts (there's no linking). Discord web sign-in and Discord activity sign-in reach the same account, keyed by the Discord user ID.
-- **Sign-in methods (website mode):** email magic link always; "Sign in with Discord" as well whenever `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` are set (no Cargo feature). Discord then redirects back to `{PUBLIC_BASE_URL}/`, so register that URL for each environment in the Discord Developer Portal ([`deploy.md`](deploy.md)), and `PUBLIC_BASE_URL` becomes required.
+- **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`, `google_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email, Discord or Google ID. How sign-ins map to accounts:
+  - **Discord** sign-ins are always their own accounts, never matched to email (Discord web and activity sign-in share one account, keyed by the Discord user ID).
+  - **Google** sign-ins are matched to the email account for the same address, in both directions, but **only when Google is authoritative for the address**: it's verified and either an `@gmail.com` address or a Google Workspace account. Any other Google account (e.g. one registered with a third-party address) gets its own account with no email, because Google says such an address may have changed hands.
+- **Sign-in methods (website mode):** email magic link always; "Sign in with Discord" whenever `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` are set; "Sign in with Google" whenever `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` are set (no Cargo features). Both redirect back to `{PUBLIC_BASE_URL}/`, so register that URL for each environment with the provider ([`deploy.md`](deploy.md)), and `PUBLIC_BASE_URL` becomes required.
 
 ## 3. Client
 
@@ -81,10 +83,10 @@ fn Home() -> impl IntoView {
 }
 ```
 
-- `<AuthGate>` runs the sign-in flow and renders its children only when signed in. On a website it shows the email form, plus a "Sign in with Discord" button when the server has Discord configured; inside an activity (`discord-activity` feature) it signs in with Discord automatically.
-- **Reserved query names on `/`:** sign-in returns land on the site root, where `<AuthGate>` reads and then removes `login_code` (email link) and `state` with `code` or `error` (Discord). Don't use those names in the app's own root-page URLs.
+- `<AuthGate>` runs the sign-in flow and renders its children only when signed in. On a website it shows the email form, plus "Sign in with Discord" / "Sign in with Google" buttons for the providers the server has configured; inside an activity (`discord-activity` feature) it signs in with Discord automatically.
+- **Reserved query names on `/`:** sign-in returns land on the site root, where `<AuthGate>` reads and then removes `login_code` (email link) and `state` with `code` or `error` (Discord and Google; the state starts with `discord.` or `google.`). Don't use those names in the app's own root-page URLs.
 - Call the app's API with `api_get` / `api_post` only. They send JSON (and the activity bearer token, if any). An empty/204 response parses as `()`. Errors are `FetchError::Status(u16)` or `FetchError::Network(String)`.
-- The sign-in views are unstyled HTML with `webapp-login`, `webapp-discord` (the Discord button), `webapp-error` and `webapp-status` classes for the app's CSS to style.
+- The sign-in views are unstyled HTML with `webapp-login`, `webapp-providers` (a group holding the provider buttons, rendered only when one is offered, so it can be set apart from the email field), `webapp-discord` and `webapp-google` (the provider buttons), `webapp-error` and `webapp-status` classes for the app's CSS to style. **Style the Google button per [Google's sign-in branding guidelines](https://developers.google.com/identity/branding-guidelines)** (logo, colors, wording); that's the app's responsibility.
 - `Trunk.toml` should output to `build/dist` and proxy `/api` to the local server. Copy `example/client/Trunk.toml`; its `no_sri` and `no_autoreload` settings are only needed for Discord activities (§4).
 
 ## 4. Discord activity (optional `discord-activity` feature)
@@ -179,6 +181,7 @@ Codes the framework uses today (from `crates/webapp-server/src/keys.rs`; new fra
 | `FA<account_id>` | Account (JSON `Account`) |
 | `FE<email>` | Email identity → `account_id` |
 | `FD<discord_id>` | Discord identity → `account_id` |
+| `FG<sub>` | Google identity (Google's user ID) → `account_id` |
 | `FS<token>` | Session → `account_id` (sliding TTL) |
 | `FL<code>` | One-time email login code |
 | `FR<ip>` | Email rate-limit gate |

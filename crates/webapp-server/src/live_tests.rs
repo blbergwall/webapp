@@ -34,6 +34,7 @@ fn new_account(email: &str) -> impl FnOnce(String, u64) -> Account + '_ {
         display_name: "tester".to_string(),
         email: Some(email.to_string()),
         discord_id: None,
+        google_id: None,
     }
 }
 
@@ -216,6 +217,60 @@ async fn discord_account_keyed_by_discord_id() {
     // A different Discord user: a different account.
     let other = account::find_or_create_by_discord(redis, "222", "Other").await.unwrap();
     assert_ne!(other.id, first.id);
+
+    cleanup(&app).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn google_account_matching_by_trusted_email() {
+    let app = test_app();
+    let redis = app.redis();
+
+    // New Google user with a trusted email: a new account that also owns the
+    // email identity, so a later email sign-in reaches it.
+    let created = account::find_or_create_by_google(redis, "g1", Some("ann@gmail.com"), Some("Ann"))
+        .await
+        .unwrap();
+    assert_eq!(created.google_id.as_deref(), Some("g1"));
+    assert_eq!(created.email.as_deref(), Some("ann@gmail.com"));
+    assert_eq!(created.display_name, "Ann");
+    let by_email = account::find_or_create_by_email(redis, "ann@gmail.com").await.unwrap();
+    assert_eq!(by_email.id, created.id);
+
+    // Same Google user again: same account.
+    let again = account::find_or_create_by_google(redis, "g1", Some("ann@gmail.com"), None)
+        .await
+        .unwrap();
+    assert_eq!(again, created);
+
+    // An existing email account gets linked to a Google user with that
+    // trusted address, and remembers the link.
+    let email_account = account::find_or_create_by_email(redis, "bob@example.com").await.unwrap();
+    let linked = account::find_or_create_by_google(redis, "g2", Some("bob@example.com"), Some("Bob"))
+        .await
+        .unwrap();
+    assert_eq!(linked.id, email_account.id);
+    assert_eq!(linked.google_id.as_deref(), Some("g2"));
+    assert_eq!(linked.display_name, email_account.display_name, "linking keeps the account's name");
+    let stored = account::get(redis, &linked.id).await.unwrap().unwrap();
+    assert_eq!(stored.google_id.as_deref(), Some("g2"));
+
+    // Without a trusted email: a separate account with no email, which never
+    // claims the address (an email sign-in for it is still its own account).
+    let untrusted = account::find_or_create_by_google(redis, "g3", None, Some("Cy")).await.unwrap();
+    assert_eq!(untrusted.email, None);
+    assert_eq!(untrusted.google_id.as_deref(), Some("g3"));
+    let cy_email = account::find_or_create_by_email(redis, "cy@example.com").await.unwrap();
+    assert_ne!(cy_email.id, untrusted.id);
+
+    // Display name falls back to the email's local part, then "Google user".
+    let unnamed = account::find_or_create_by_google(redis, "g4", Some("dee@gmail.com"), Some("  "))
+        .await
+        .unwrap();
+    assert_eq!(unnamed.display_name, "dee");
+    let anonymous = account::find_or_create_by_google(redis, "g5", None, None).await.unwrap();
+    assert_eq!(anonymous.display_name, "Google user");
 
     cleanup(&app).await;
 }

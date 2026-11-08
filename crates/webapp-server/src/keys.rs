@@ -24,6 +24,10 @@ pub const IDENTITY_EMAIL: &str = "FE";
 /// to. Claimed with `SET ... NX`, like `FE`. No TTL.
 pub const IDENTITY_DISCORD: &str = "FD";
 
+/// `FG<sub>` — Google identity (Google's stable user ID): value is the
+/// `account_id` it belongs to. Claimed with `SET ... NX`, like `FE`. No TTL.
+pub const IDENTITY_GOOGLE: &str = "FG";
+
 /// `FS<token>` — session: value is the `account_id`. Sliding TTL, refreshed
 /// (via `GETEX`, in the same command as the read) on every authenticated
 /// request. Discord activity sessions' tokens (`discord-activity` feature)
@@ -38,10 +42,10 @@ pub const SESSION_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 #[cfg(feature = "discord-activity")]
 pub const ACTIVITY_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 
-/// Lifetime of the `discord_state` cookie: how long a Discord web sign-in
-/// may take between "Sign in with Discord" and returning to the site. A
-/// cookie, not a Redis record, so it has no prefix.
-pub const DISCORD_STATE_TTL_SECS: u64 = 10 * 60;
+/// Lifetime of an OAuth state cookie (`discord_state`, `google_state`): how
+/// long a Discord or Google sign-in may take between clicking the button and
+/// returning to the site. A cookie, not a Redis record, so it has no prefix.
+pub const OAUTH_STATE_TTL_SECS: u64 = 10 * 60;
 
 /// `FL<code>` — a one-time email login code: JSON `{email, pending}`.
 /// Consumed with `GETDEL`.
@@ -77,6 +81,7 @@ pub const FRAMEWORK_PREFIXES: &[&str] = &[
     ACCOUNT,
     IDENTITY_EMAIL,
     IDENTITY_DISCORD,
+    IDENTITY_GOOGLE,
     SESSION,
     LOGIN_CODE,
     RATE_LIMIT,

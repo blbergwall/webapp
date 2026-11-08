@@ -5,7 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 /// A user account. One account can be reached through several identities
-/// (an email address, a Discord user), each of which maps to `id`.
+/// (an email address, a Discord user, a Google user), each of which maps to
+/// `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Account {
     pub id: String,
@@ -14,6 +15,10 @@ pub struct Account {
     pub display_name: String,
     pub email: Option<String>,
     pub discord_id: Option<String>,
+    /// Google's user ID (`sub`). Absent in records written before Google
+    /// sign-in existed.
+    #[serde(default)]
+    pub google_id: Option<String>,
 }
 
 /// Response body of `GET /api/auth/config`: runtime settings the client
@@ -24,19 +29,23 @@ pub struct AuthConfig {
     /// Discord sign-in is available: the web button in website mode, and
     /// activity sign-in (with the `discord-activity` feature).
     pub discord_client_id: Option<String>,
+    /// Whether "Sign in with Google" is available (website mode).
+    #[serde(default)]
+    pub google_sign_in: bool,
 }
 
-/// Response body of `POST /api/auth/discord/web/start`.
+/// Response body of the OAuth `start` endpoints
+/// (`POST /api/auth/discord/web/start`, `POST /api/auth/google/start`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiscordWebStartResponse {
-    /// Discord's authorize page; the client navigates the browser there.
+pub struct OAuthStartResponse {
+    /// The provider's authorize page; the client navigates the browser there.
     pub url: String,
 }
 
-/// Request body of `POST /api/auth/discord/web/confirm`: the `code` and
-/// `state` query params Discord redirected back to the site with.
+/// Request body of the OAuth `confirm` endpoints: the `code` and `state`
+/// query params the provider redirected back to the site with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiscordWebConfirmRequest {
+pub struct OAuthConfirmRequest {
     pub code: String,
     pub state: String,
 }

@@ -94,6 +94,7 @@ pub(crate) fn csrf_ok(method: &Method, headers: &HeaderMap, source: TokenSource)
 pub(crate) async fn config(State(app): State<WebApp>) -> Json<AuthConfig> {
     Json(AuthConfig {
         discord_client_id: app.config().discord.as_ref().map(|discord| discord.client_id.clone()),
+        google_sign_in: app.config().google.is_some(),
     })
 }
 

@@ -9,10 +9,18 @@ main {
   padding: 0 1rem;
 }
 
-.webapp-login {
+.webapp-login,
+.webapp-providers {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Provider buttons sit apart from the email field they don't use. */
+.webapp-providers {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent);
 }
 
 input,

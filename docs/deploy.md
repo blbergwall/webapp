@@ -21,7 +21,7 @@ Prerequisites: `fly` CLI logged in (`fly auth whoami`). Docker isn't needed, bec
 fly apps create webapp-example
 
 # 2. Import secrets from .env without printing them (bash). Staged secrets apply on the next deploy.
-grep -E '^(UPSTASH_REDIS_REST_URL|UPSTASH_REDIS_REST_TOKEN|REDIS_KEY_PREFIX|RESEND_API_KEY|RESEND_FROM_EMAIL|DISCORD_CLIENT_ID|DISCORD_CLIENT_SECRET)=.+' .env \
+grep -E '^(UPSTASH_REDIS_REST_URL|UPSTASH_REDIS_REST_TOKEN|REDIS_KEY_PREFIX|RESEND_API_KEY|RESEND_FROM_EMAIL|DISCORD_CLIENT_ID|DISCORD_CLIENT_SECRET|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET)=.+' .env \
   | fly secrets import --stage --app webapp-example
 
 # 3. Build and deploy. --ha=false: one machine instead of Fly's default two
@@ -82,6 +82,19 @@ For apps with Discord sign-in: setting `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SEC
 
 **Dev vs. production mapping:** a Discord app has a single Root Mapping. For the example, repoint it temporarily to test production, then point it back to the tunnel. For a real app, keep the production app's mapping on production, and create a second Discord app (with its own client ID and secret) for development.
 
+## Google app setup
+
+For apps with Google sign-in: setting `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` turns on "Sign in with Google" on the website. Once per app, in the [Google Cloud Console](https://console.cloud.google.com/) → **Google Auth Platform**:
+
+1. **Project:** create or select one (e.g. one per app).
+2. **Branding:** app name, user support email, developer contact email.
+3. **Audience:** user type **External**. A new app is in **Testing**: only the listed **test users** (up to 100) can sign in, so add your own Google account. When the site goes live, click **Publish app**: with only the scopes below there's no review, no "unverified app" warning and no user cap.
+4. **Data Access:** add the scopes `openid`, `.../auth/userinfo.email` and `.../auth/userinfo.profile` (all non-sensitive).
+5. **Clients → Create client → Web application:** under **Authorized redirect URIs** add `{PUBLIC_BASE_URL}/` for every environment, exactly (scheme, host, port, trailing `/`, no spaces), e.g. `http://localhost:8080/` and `https://webapp-example.fly.dev/`. One client can hold all of them. "Authorized JavaScript origins" isn't needed. Changes can take a few minutes to a few hours to apply; until then Google shows `redirect_uri_mismatch`.
+6. **Copy the Client ID and Client Secret right away.** Google shows the full secret only once, at creation (lost secret → add a new one). Put them in `.env` (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) and into the Fly secrets.
+
+**Brand verification** is optional: without it, sign-in works, but the consent screen may not show the app's name and logo. It needs the app's domain verified in Google Search Console, a public home page and a privacy policy on that domain, and is usually automated (minutes), occasionally 2–3 business days. The Google button's look must follow [Google's branding guidelines](https://developers.google.com/identity/branding-guidelines) (the app's CSS).
+
 ## Environment variables
 
 | Variable | Required | Secret | Where | Purpose |
@@ -91,10 +104,12 @@ For apps with Discord sign-in: setting `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SEC
 | `REDIS_KEY_PREFIX` | no | no | secret or `[env]` | Namespace for every key, to share one DB between apps or environments (the example uses none) |
 | `RESEND_API_KEY` | for email login | yes | secret | Send login emails via Resend |
 | `RESEND_FROM_EMAIL` | with `RESEND_API_KEY` | no | secret | Sender address on a Resend-verified domain |
-| `PUBLIC_BASE_URL` | for email or Discord login | no | `[env]` | Origin users reach the site at: the emailed login link and the Discord web sign-in redirect (`{PUBLIC_BASE_URL}/`) are built from it |
+| `PUBLIC_BASE_URL` | for email, Discord or Google login | no | `[env]` | Origin users reach the site at: the emailed login link and the Discord / Google sign-in redirect (`{PUBLIC_BASE_URL}/`) are built from it |
 | `APP_NAME` | no (default `webapp`) | no | `[env]` | Shown in the login email subject and body |
 | `DISCORD_CLIENT_ID` | for Discord login, web and activity (set both or neither) | no | secret | Discord application ID |
 | `DISCORD_CLIENT_SECRET` | with `DISCORD_CLIENT_ID` | yes | secret | Discord OAuth2 secret |
+| `GOOGLE_CLIENT_ID` | for Google login (set both or neither) | no | secret | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | with `GOOGLE_CLIENT_ID` | yes | secret | Google OAuth client secret |
 | `DEV_MODE` | no | no | local only | `1` with no Resend key prints login links to the console. **Never set in production.** |
 | `BIND_ADDR` | no | no | image | Listen address (`0.0.0.0:8080` in the image; `127.0.0.1:3000` default locally) |
 | `STATIC_DIR` | no | no | image | Client files (`/app/dist` in the image; `build/dist` default locally) |
@@ -105,4 +120,4 @@ For apps with Discord sign-in: setting `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SEC
 2. In `Dockerfile`, replace `example/client` and `example-server` (both the build and `COPY` lines) with the app's client directory and server package name. Keep its `Trunk.toml` outputting to `build/dist`, or change the `COPY --from=builder` path to match.
 3. In `fly.toml`, set `app`, `primary_region`, `APP_NAME` and `PUBLIC_BASE_URL`.
 4. Depend on the framework through its GitHub git dependency pinned to a tag, not a path (implementation guide §1). The build only sees the app's folder. If you develop against a local copy via a `.cargo/config.toml` patch, keep `.cargo` in `.dockerignore`.
-5. Follow **First deploy** (and, for a Discord activity, **Discord app setup**) above with the new app's names.
+5. Follow **First deploy** (and, for Discord or Google sign-in, **Discord app setup** / **Google app setup**) above with the new app's names.

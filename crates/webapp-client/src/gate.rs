@@ -7,8 +7,8 @@
 
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
 use webapp_common::{
-    Account, AuthConfig, DiscordWebConfirmRequest, DiscordWebStartResponse, EmailConfirmRequest,
-    EmailStartRequest,
+    Account, AuthConfig, EmailConfirmRequest, EmailStartRequest, OAuthConfirmRequest,
+    OAuthStartResponse,
 };
 
 use crate::api::{FetchError, api_get, api_post};
@@ -53,7 +53,8 @@ enum Stage {
 /// with an [`AuthContext`] available through [`use_auth`].
 ///
 /// On a plain website it uses email magic links (including handling the
-/// `?login_code=` the emailed link opens with). With the `discord-activity`
+/// `?login_code=` the emailed link opens with), plus "Sign in with Discord"
+/// and "Sign in with Google" when the server offers them. With the `discord-activity`
 /// feature, inside a Discord activity it signs in with Discord automatically
 /// instead.
 #[component]
@@ -66,9 +67,9 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
     // Keeps the last signed-in account after logout, so `AuthContext.account`
     // never has to be optional for code that briefly outlives a sign-out.
     let account = RwSignal::new(None::<Account>);
-    // Website mode: whether the server offers Discord web sign-in (from
-    // `/api/auth/config`), to show the button next to the email form.
-    let discord_web = RwSignal::new(false);
+    // Website mode: which provider sign-ins the server offers (from
+    // `/api/auth/config`), to show their buttons next to the email form.
+    let offered = RwSignal::new(Offered::default());
 
     let sign_in = move |signed_in: Account| {
         account.set(Some(signed_in));
@@ -104,13 +105,13 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
         #[cfg(feature = "discord-activity")]
         spawn_local(activity_sign_in(stage, sign_in));
     } else {
-        spawn_local(load_discord_web(discord_web));
+        spawn_local(load_offered(offered));
         spawn_local(website_start(stage, sign_in));
     }
 
     move || match stage.get() {
         Stage::Busy(message) => view! { <p class="webapp-status">{message}</p> }.into_any(),
-        Stage::EmailForm(notice) => view! { <EmailForm stage notice discord_web /> }.into_any(),
+        Stage::EmailForm(notice) => view! { <EmailForm stage notice offered /> }.into_any(),
         Stage::CheckEmail(email) => view! {
             <div class="webapp-login">
                 <p>"We've sent a sign-in link to " <strong>{email}</strong> ". Open it to finish signing in."</p>
@@ -144,26 +145,91 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
     }
 }
 
+/// A website-mode sign-in with another provider (OAuth redirect flow).
+#[derive(Clone, Copy, PartialEq)]
+enum Provider {
+    Discord,
+    Google,
+}
+
+impl Provider {
+    const ALL: [Provider; 2] = [Provider::Discord, Provider::Google];
+
+    fn name(self) -> &'static str {
+        match self {
+            Provider::Discord => "Discord",
+            Provider::Google => "Google",
+        }
+    }
+
+    fn start_path(self) -> &'static str {
+        match self {
+            Provider::Discord => "/api/auth/discord/web/start",
+            Provider::Google => "/api/auth/google/start",
+        }
+    }
+
+    fn confirm_path(self) -> &'static str {
+        match self {
+            Provider::Discord => "/api/auth/discord/web/confirm",
+            Provider::Google => "/api/auth/google/confirm",
+        }
+    }
+
+    fn button_class(self) -> &'static str {
+        match self {
+            Provider::Discord => "webapp-discord",
+            Provider::Google => "webapp-google",
+        }
+    }
+
+    fn busy_message(self) -> &'static str {
+        match self {
+            Provider::Discord => "Signing in with Discord…",
+            Provider::Google => "Signing in with Google…",
+        }
+    }
+
+    /// The provider a returned `state` belongs to: the server prefixes it
+    /// with the provider's name (`discord.…`, `google.…`).
+    fn from_state(state: &str) -> Option<Provider> {
+        match state.split_once('.')?.0 {
+            "discord" => Some(Provider::Discord),
+            "google" => Some(Provider::Google),
+            _ => None,
+        }
+    }
+}
+
+/// Which provider sign-ins the server offers.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Offered {
+    discord: bool,
+    google: bool,
+}
+
+impl Offered {
+    fn includes(self, provider: Provider) -> bool {
+        match provider {
+            Provider::Discord => self.discord,
+            Provider::Google => self.google,
+        }
+    }
+}
+
 /// The website sign-in form: email magic link, plus a "Sign in with Discord"
-/// button when the server offers Discord web sign-in.
+/// / "Sign in with Google" button for each provider the server offers.
 #[component]
-fn EmailForm(
-    stage: RwSignal<Stage>,
-    notice: Option<String>,
-    discord_web: RwSignal<bool>,
-) -> impl IntoView {
+fn EmailForm(stage: RwSignal<Stage>, notice: Option<String>, offered: RwSignal<Offered>) -> impl IntoView {
     let email = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let error = RwSignal::new(notice);
 
-    let start_discord = move |_| {
+    let start_provider = move |provider: Provider| {
         busy.set(true);
         spawn_local(async move {
-            let started = api_post::<_, DiscordWebStartResponse>(
-                "/api/auth/discord/web/start",
-                &serde_json::json!({}),
-            )
-            .await;
+            let started =
+                api_post::<_, OAuthStartResponse>(provider.start_path(), &serde_json::json!({})).await;
             let navigated = match started {
                 Ok(response) => web_sys::window()
                     .ok_or_else(|| "no window".to_string())
@@ -172,9 +238,10 @@ fn EmailForm(
                     }),
                 Err(err) => Err(err.to_string()),
             };
-            // On success the page is leaving for Discord, so stay busy.
+            // On success the page is leaving for the provider, so stay busy.
             if let Err(message) = navigated {
-                error.try_set(Some(format!("Couldn't start Discord sign-in ({message}).")));
+                let name = provider.name();
+                error.try_set(Some(format!("Couldn't start {name} sign-in ({message}).")));
                 busy.try_set(false);
             }
         });
@@ -213,10 +280,28 @@ fn EmailForm(
             <input id="webapp-email" type="email" required autocomplete="email" bind:value=email />
             <button type="submit" disabled=move || busy.get()>"Send sign-in link"</button>
             {move || {
-                discord_web.get().then(|| view! {
-                    <button type="button" class="webapp-discord" on:click=start_discord disabled=move || busy.get()>
-                        "Sign in with Discord"
-                    </button>
+                let offered = offered.get();
+                let providers: Vec<Provider> = Provider::ALL
+                    .into_iter()
+                    .filter(|provider| offered.includes(*provider))
+                    .collect();
+                // Grouped apart from the email field, so apps can separate them.
+                (!providers.is_empty()).then(|| view! {
+                    <div class="webapp-providers">
+                        {providers
+                            .into_iter()
+                            .map(|provider| view! {
+                                <button
+                                    type="button"
+                                    class=provider.button_class()
+                                    on:click=move |_| start_provider(provider)
+                                    disabled=move || busy.get()
+                                >
+                                    {format!("Sign in with {}", provider.name())}
+                                </button>
+                            })
+                            .collect_view()}
+                    </div>
                 })
             }}
             {move || error.get().map(|message| view! { <p class="webapp-error">{message}</p> })}
@@ -224,30 +309,34 @@ fn EmailForm(
     }
 }
 
-/// Website mode: asks the server whether Discord web sign-in is available.
-/// On failure the button just stays hidden; the email form still works.
-async fn load_discord_web(discord_web: RwSignal<bool>) {
+/// Website mode: asks the server which provider sign-ins it offers. On
+/// failure the buttons just stay hidden; the email form still works.
+async fn load_offered(offered: RwSignal<Offered>) {
     if let Ok(config) = api_get::<AuthConfig>("/api/auth/config").await {
-        discord_web.try_set(config.discord_client_id.is_some());
+        offered.try_set(Offered {
+            discord: config.discord_client_id.is_some(),
+            google: config.google_sign_in,
+        });
     }
 }
 
-/// Website mode on page load: finish a Discord web sign-in or a
-/// `?login_code=` link if the URL carries one, otherwise check for an
-/// existing session cookie.
+/// Website mode on page load: finish a provider sign-in or a `?login_code=`
+/// link if the URL carries one, otherwise check for an existing session
+/// cookie.
 async fn website_start(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Copy + 'static) {
-    match take_discord_return() {
-        Some(DiscordReturn::Code(request)) => {
-            confirm_discord(stage, sign_in, request).await;
+    match take_provider_return() {
+        Some((provider, ProviderReturn::Code(request))) => {
+            confirm_provider(stage, sign_in, provider, request).await;
             return;
         }
-        Some(DiscordReturn::Error(error)) => {
+        Some((provider, ProviderReturn::Error(error))) => {
+            let name = provider.name();
             let message = if error == "access_denied" {
-                "Discord sign-in was cancelled."
+                format!("{name} sign-in was cancelled.")
             } else {
-                "Discord sign-in failed. Please try again."
+                format!("{name} sign-in failed. Please try again.")
             };
-            stage.set(Stage::EmailForm(Some(message.to_string())));
+            stage.set(Stage::EmailForm(Some(message)));
             return;
         }
         None => {}
@@ -285,22 +374,21 @@ async fn confirm_email(
     }
 }
 
-async fn confirm_discord(
+async fn confirm_provider(
     stage: RwSignal<Stage>,
     sign_in: impl Fn(Account) + Copy + 'static,
-    request: DiscordWebConfirmRequest,
+    provider: Provider,
+    request: OAuthConfirmRequest,
 ) {
-    stage.set(Stage::Busy("Signing in with Discord…"));
-    let message = match api_post::<_, Account>("/api/auth/discord/web/confirm", &request).await {
+    stage.set(Stage::Busy(provider.busy_message()));
+    let name = provider.name();
+    let message = match api_post::<_, Account>(provider.confirm_path(), &request).await {
         Ok(account) => return sign_in(account),
         Err(FetchError::Status(400)) => {
-            "That Discord sign-in expired or was started in another browser. Please try again."
-                .to_string()
+            format!("That {name} sign-in expired or was started in another browser. Please try again.")
         }
-        Err(FetchError::Status(401)) => {
-            "Discord didn't accept that sign-in. Please try again.".to_string()
-        }
-        Err(err) => format!("Couldn't sign in with Discord ({err})."),
+        Err(FetchError::Status(401)) => format!("{name} didn't accept that sign-in. Please try again."),
+        Err(err) => format!("Couldn't sign in with {name} ({err})."),
     };
     stage.set(Stage::EmailForm(Some(message)));
 }
@@ -314,27 +402,28 @@ async fn activity_sign_in(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Co
     }
 }
 
-/// What Discord sent the browser back to `/` with after a web sign-in.
-enum DiscordReturn {
+/// What a provider sent the browser back to `/` with after a sign-in.
+enum ProviderReturn {
     /// `?code=…&state=…`: confirm with the server.
-    Code(DiscordWebConfirmRequest),
+    Code(OAuthConfirmRequest),
     /// `?error=…&state=…`, e.g. `access_denied` when the user cancelled.
     Error(String),
 }
 
-/// Reads a Discord web sign-in return from the URL (a `state` plus either
-/// `code` or `error`) and removes the query string, so a reload doesn't
-/// replay it.
-fn take_discord_return() -> Option<DiscordReturn> {
+/// Reads a provider sign-in return from the URL (a provider-prefixed `state`
+/// plus either `code` or `error`) and removes the query string, so a reload
+/// doesn't replay it.
+fn take_provider_return() -> Option<(Provider, ProviderReturn)> {
     let params = query_params()?;
     let state = params.get("state")?;
+    let provider = Provider::from_state(&state)?;
     let found = match (params.get("code"), params.get("error")) {
-        (Some(code), _) => DiscordReturn::Code(DiscordWebConfirmRequest { code, state }),
-        (None, Some(error)) => DiscordReturn::Error(error),
+        (Some(code), _) => ProviderReturn::Code(OAuthConfirmRequest { code, state }),
+        (None, Some(error)) => ProviderReturn::Error(error),
         (None, None) => return None,
     };
     clear_query();
-    Some(found)
+    Some((provider, found))
 }
 
 /// Reads `login_code` from the URL and removes the query string, so a reload

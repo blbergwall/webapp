@@ -1,6 +1,7 @@
 //! Server-side auth framework: axum routes, the `Auth` extractor, Upstash
-//! Redis REST storage, email (Resend) and Discord login. Discord web sign-in
-//! is enabled at runtime by `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET`.
+//! Redis REST storage, email (Resend), Discord and Google login. Discord and
+//! Google web sign-in are enabled at runtime by their credentials
+//! (`DISCORD_CLIENT_ID` / `_SECRET`, `GOOGLE_CLIENT_ID` / `_SECRET`).
 //!
 //! Optional Cargo features (both off by default):
 //! - `discord-activity`: Discord activity sign-in (`POST /api/auth/discord`)
@@ -29,9 +30,11 @@ mod discord;
 mod discord_web;
 mod email;
 mod error;
+mod google;
 pub mod keys;
 #[cfg(test)]
 mod live_tests;
+mod oauth;
 mod random;
 mod redis;
 mod session;
@@ -107,7 +110,9 @@ where
         .route("/api/auth/email/start", post(email::start))
         .route("/api/auth/email/confirm", post(email::confirm))
         .route("/api/auth/discord/web/start", post(discord_web::start))
-        .route("/api/auth/discord/web/confirm", post(discord_web::confirm));
+        .route("/api/auth/discord/web/confirm", post(discord_web::confirm))
+        .route("/api/auth/google/start", post(google::start))
+        .route("/api/auth/google/confirm", post(google::confirm));
     #[cfg(feature = "discord-activity")]
     let router = router.route("/api/auth/discord", post(activity::login));
     router

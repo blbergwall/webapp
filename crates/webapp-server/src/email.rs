@@ -126,8 +126,9 @@ pub(crate) async fn confirm(
 
 /// Trims and lowercases an address, returning `None` unless it looks like
 /// `local@domain`. Deliberately minimal: Resend rejects anything else that
-/// is undeliverable.
-fn normalize_email(raw: &str) -> Option<String> {
+/// is undeliverable. Google sign-in normalizes its trusted addresses the same
+/// way, so they match `FE` identities.
+pub(crate) fn normalize_email(raw: &str) -> Option<String> {
     let email = raw.trim().to_lowercase();
     let (local, domain) = email.split_once('@')?;
     let valid = !local.is_empty()

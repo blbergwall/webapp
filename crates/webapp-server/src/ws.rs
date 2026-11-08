@@ -146,6 +146,7 @@ mod tests {
             upstash_token: String::new(),
             key_prefix: String::new(),
             discord: None,
+            google: None,
             app_name: "test".to_string(),
             public_base_url: None,
             email: EmailDelivery::Disabled,

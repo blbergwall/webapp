@@ -20,8 +20,25 @@ pub struct Account {
 /// needs before it can sign in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// `None` when the server has no Discord app configured.
+    /// `None` when the server has no Discord app configured. `Some` means
+    /// Discord sign-in is available: the web button in website mode, and
+    /// activity sign-in (with the `discord-activity` feature).
     pub discord_client_id: Option<String>,
+}
+
+/// Response body of `POST /api/auth/discord/web/start`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscordWebStartResponse {
+    /// Discord's authorize page; the client navigates the browser there.
+    pub url: String,
+}
+
+/// Request body of `POST /api/auth/discord/web/confirm`: the `code` and
+/// `state` query params Discord redirected back to the site with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscordWebConfirmRequest {
+    pub code: String,
+    pub state: String,
 }
 
 /// Request body of `POST /api/auth/discord`: the OAuth2 code from the

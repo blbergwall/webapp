@@ -10,6 +10,11 @@ pub const SESSION_COOKIE: &str = "session";
 /// requested it. Scoped to the email endpoints.
 pub const PENDING_LOGIN_COOKIE: &str = "pending_login";
 
+/// Name of the cookie holding a Discord web sign-in's OAuth2 `state`, which
+/// binds the sign-in to the browser that started it. Scoped to the Discord
+/// web endpoints.
+pub const DISCORD_STATE_COOKIE: &str = "discord_state";
+
 /// Marks a Discord activity session's token, so its (shorter) TTL can be
 /// chosen from the token alone, without another Redis round trip.
 #[cfg(feature = "discord-activity")]
@@ -104,6 +109,24 @@ pub fn clear_pending_login_cookie() -> HeaderValue {
     )
 }
 
+/// `Set-Cookie` value for a Discord web sign-in's `state` (see
+/// [`DISCORD_STATE_COOKIE`]). `SameSite=Lax` is enough: only the SPA's
+/// same-origin `confirm` call reads it.
+pub fn discord_state_cookie(state: &str) -> HeaderValue {
+    let max_age = keys::DISCORD_STATE_TTL_SECS;
+    let cookie = format!(
+        "{DISCORD_STATE_COOKIE}={state}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/discord/web; Max-Age={max_age}"
+    );
+    HeaderValue::from_str(&cookie).expect("state values are hex, so always a valid header")
+}
+
+/// `Set-Cookie` value that removes the Discord state cookie.
+pub fn clear_discord_state_cookie() -> HeaderValue {
+    HeaderValue::from_static(
+        "discord_state=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/discord/web; Max-Age=0",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +177,25 @@ mod tests {
         for attribute in ["HttpOnly", "Secure", "SameSite=Lax", "Path=/", "Max-Age=7776000"] {
             assert!(cookie.contains(attribute), "missing {attribute}");
         }
+    }
+
+    #[test]
+    fn discord_state_cookie_attributes() {
+        let cookie = discord_state_cookie("abc");
+        let cookie = cookie.to_str().unwrap();
+        assert!(cookie.starts_with("discord_state=abc;"));
+        for attribute in [
+            "HttpOnly",
+            "Secure",
+            "SameSite=Lax",
+            "Path=/api/auth/discord/web;",
+            "Max-Age=600",
+        ] {
+            assert!(cookie.contains(attribute), "missing {attribute}");
+        }
+        let cleared = clear_discord_state_cookie();
+        let cleared = cleared.to_str().unwrap();
+        assert!(cleared.starts_with("discord_state=;"));
+        assert!(cleared.contains("Path=/api/auth/discord/web;") && cleared.contains("Max-Age=0"));
     }
 }

@@ -13,8 +13,8 @@ Pick a dependency style:
 | Style | `Cargo.toml` | When |
 |---|---|---|
 | Local path | `webapp-server = { path = "../webapp/crates/webapp-server" }` | Developing the app and the framework together; always the current working copy, no version pinning. |
-| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.2.0" }` | Local builds pinned to a tagged, committed version. |
-| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.2.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
+| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.3.0" }` | Local builds pinned to a tagged, committed version. |
+| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.3.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
 
 The framework is published at `https://github.com/blbergwall/webapp` (public, so builds fetch it without credentials). Tags are `vX.Y.Z` and never move once pushed. To pick up a new release, change `tag` on both dependencies and run `cargo update -p webapp-server -p webapp-client`.
 
@@ -62,7 +62,8 @@ async fn list_things(Auth(account): Auth) -> Result<Json<Vec<Thing>>, ApiError> 
 - **Errors:** return `ApiError`. Any `anyhow::Error` converts with `?` into a logged, generic 500, so details never reach the client. The other variants map to 400/401/403/404/409/410/429.
 - **CSRF rule:** a cookie-authenticated request with a method other than GET/HEAD/OPTIONS must send `Content-Type: application/json`, or `Auth` rejects it with 403. Design write endpoints to take JSON. The client helpers always send it.
 - **Sessions:** website sessions are a 90-day sliding cookie. (Discord activity sessions are bearer tokens; see §4.)
-- **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email or Discord ID. A website user and a Discord user are separate accounts unless linked (linking is planned, not built).
+- **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email or Discord ID. An email sign-in and a Discord sign-in are separate accounts (there's no linking). Discord web sign-in and Discord activity sign-in reach the same account, keyed by the Discord user ID.
+- **Sign-in methods (website mode):** email magic link always; "Sign in with Discord" as well whenever `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` are set (no Cargo feature). Discord then redirects back to `{PUBLIC_BASE_URL}/`, so register that URL for each environment in the Discord Developer Portal ([`deploy.md`](deploy.md)), and `PUBLIC_BASE_URL` becomes required.
 
 ## 3. Client
 
@@ -80,9 +81,10 @@ fn Home() -> impl IntoView {
 }
 ```
 
-- `<AuthGate>` runs the sign-in flow (email magic link, or Discord inside an activity with the `discord-activity` feature) and renders its children only when signed in.
+- `<AuthGate>` runs the sign-in flow and renders its children only when signed in. On a website it shows the email form, plus a "Sign in with Discord" button when the server has Discord configured; inside an activity (`discord-activity` feature) it signs in with Discord automatically.
+- **Reserved query names on `/`:** sign-in returns land on the site root, where `<AuthGate>` reads and then removes `login_code` (email link) and `state` with `code` or `error` (Discord). Don't use those names in the app's own root-page URLs.
 - Call the app's API with `api_get` / `api_post` only. They send JSON (and the activity bearer token, if any). An empty/204 response parses as `()`. Errors are `FetchError::Status(u16)` or `FetchError::Network(String)`.
-- The sign-in views are unstyled HTML with `webapp-login`, `webapp-error` and `webapp-status` classes for the app's CSS to style.
+- The sign-in views are unstyled HTML with `webapp-login`, `webapp-discord` (the Discord button), `webapp-error` and `webapp-status` classes for the app's CSS to style.
 - `Trunk.toml` should output to `build/dist` and proxy `/api` to the local server. Copy `example/client/Trunk.toml`; its `no_sri` and `no_autoreload` settings are only needed for Discord activities (§4).
 
 ## 4. Discord activity (optional `discord-activity` feature)
@@ -98,7 +100,7 @@ webapp-client = { ..., features = ["discord-activity"] }
 - **Sessions:** a 24-hour sliding bearer token, held in WASM memory, because cookies are unreliable through Discord's proxy. `api_get` / `api_post` attach it, and `Auth` accepts it (bearer requests skip the CSRF rule, since browsers never attach them automatically). Every launch signs in afresh.
 - **SDK:** bundled inside `webapp-client` (no `index.html` changes, and no CDN, which Discord's CSP would block). Apps that need SDK commands beyond sign-in call `authenticate_discord_sdk()` after sign-in. `is_discord_activity()` tells the app which mode it's in.
 - **`Trunk.toml`:** keep `no_sri = true` (Discord's proxy rewrites URLs inside served JS, which breaks SRI hashes) and `no_autoreload = true` (Discord's CSP blocks trunk's reload WebSocket).
-- **Configuration:** set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`, and set up the Discord application (Activities, URL mapping, the placeholder redirect URI) as in [`deploy.md`](deploy.md). Without them, `/api/auth/discord` returns 404 and the activity shows an error.
+- **Configuration:** set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`, and set up the Discord application (Activities, URL mapping, redirects) as in [`deploy.md`](deploy.md). Without them, `/api/auth/discord` returns 404 and the activity shows an error. The same credentials also turn on Discord web sign-in for the website (§2).
 - Enable the feature on both crates. A client with it and a server without it gets a 404 at sign-in. A server with it and a client without it shows the email form inside Discord.
 
 ## 5. WebSockets (optional `ws` feature)

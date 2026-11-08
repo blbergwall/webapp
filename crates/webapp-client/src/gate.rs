@@ -6,7 +6,10 @@
 //! styles; apps style them.
 
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
-use webapp_common::{Account, EmailConfirmRequest, EmailStartRequest};
+use webapp_common::{
+    Account, AuthConfig, DiscordWebConfirmRequest, DiscordWebStartResponse, EmailConfirmRequest,
+    EmailStartRequest,
+};
 
 use crate::api::{FetchError, api_get, api_post};
 #[cfg(feature = "discord-activity")]
@@ -63,6 +66,9 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
     // Keeps the last signed-in account after logout, so `AuthContext.account`
     // never has to be optional for code that briefly outlives a sign-out.
     let account = RwSignal::new(None::<Account>);
+    // Website mode: whether the server offers Discord web sign-in (from
+    // `/api/auth/config`), to show the button next to the email form.
+    let discord_web = RwSignal::new(false);
 
     let sign_in = move |signed_in: Account| {
         account.set(Some(signed_in));
@@ -98,12 +104,13 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
         #[cfg(feature = "discord-activity")]
         spawn_local(activity_sign_in(stage, sign_in));
     } else {
+        spawn_local(load_discord_web(discord_web));
         spawn_local(website_start(stage, sign_in));
     }
 
     move || match stage.get() {
         Stage::Busy(message) => view! { <p class="webapp-status">{message}</p> }.into_any(),
-        Stage::EmailForm(notice) => view! { <EmailForm stage notice /> }.into_any(),
+        Stage::EmailForm(notice) => view! { <EmailForm stage notice discord_web /> }.into_any(),
         Stage::CheckEmail(email) => view! {
             <div class="webapp-login">
                 <p>"We've sent a sign-in link to " <strong>{email}</strong> ". Open it to finish signing in."</p>
@@ -137,11 +144,41 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
     }
 }
 
+/// The website sign-in form: email magic link, plus a "Sign in with Discord"
+/// button when the server offers Discord web sign-in.
 #[component]
-fn EmailForm(stage: RwSignal<Stage>, notice: Option<String>) -> impl IntoView {
+fn EmailForm(
+    stage: RwSignal<Stage>,
+    notice: Option<String>,
+    discord_web: RwSignal<bool>,
+) -> impl IntoView {
     let email = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let error = RwSignal::new(notice);
+
+    let start_discord = move |_| {
+        busy.set(true);
+        spawn_local(async move {
+            let started = api_post::<_, DiscordWebStartResponse>(
+                "/api/auth/discord/web/start",
+                &serde_json::json!({}),
+            )
+            .await;
+            let navigated = match started {
+                Ok(response) => web_sys::window()
+                    .ok_or_else(|| "no window".to_string())
+                    .and_then(|window| {
+                        window.location().assign(&response.url).map_err(|err| format!("{err:?}"))
+                    }),
+                Err(err) => Err(err.to_string()),
+            };
+            // On success the page is leaving for Discord, so stay busy.
+            if let Err(message) = navigated {
+                error.try_set(Some(format!("Couldn't start Discord sign-in ({message}).")));
+                busy.try_set(false);
+            }
+        });
+    };
 
     let submit = move |event: SubmitEvent| {
         event.prevent_default();
@@ -175,14 +212,46 @@ fn EmailForm(stage: RwSignal<Stage>, notice: Option<String>) -> impl IntoView {
             <label for="webapp-email">"Email"</label>
             <input id="webapp-email" type="email" required autocomplete="email" bind:value=email />
             <button type="submit" disabled=move || busy.get()>"Send sign-in link"</button>
+            {move || {
+                discord_web.get().then(|| view! {
+                    <button type="button" class="webapp-discord" on:click=start_discord disabled=move || busy.get()>
+                        "Sign in with Discord"
+                    </button>
+                })
+            }}
             {move || error.get().map(|message| view! { <p class="webapp-error">{message}</p> })}
         </form>
     }
 }
 
-/// Website mode on page load: complete a `?login_code=` link if present,
-/// otherwise check for an existing session cookie.
+/// Website mode: asks the server whether Discord web sign-in is available.
+/// On failure the button just stays hidden; the email form still works.
+async fn load_discord_web(discord_web: RwSignal<bool>) {
+    if let Ok(config) = api_get::<AuthConfig>("/api/auth/config").await {
+        discord_web.try_set(config.discord_client_id.is_some());
+    }
+}
+
+/// Website mode on page load: finish a Discord web sign-in or a
+/// `?login_code=` link if the URL carries one, otherwise check for an
+/// existing session cookie.
 async fn website_start(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Copy + 'static) {
+    match take_discord_return() {
+        Some(DiscordReturn::Code(request)) => {
+            confirm_discord(stage, sign_in, request).await;
+            return;
+        }
+        Some(DiscordReturn::Error(error)) => {
+            let message = if error == "access_denied" {
+                "Discord sign-in was cancelled."
+            } else {
+                "Discord sign-in failed. Please try again."
+            };
+            stage.set(Stage::EmailForm(Some(message.to_string())));
+            return;
+        }
+        None => {}
+    }
     if let Some(code) = take_login_code() {
         confirm_email(stage, sign_in, code, true).await;
         return;
@@ -216,6 +285,26 @@ async fn confirm_email(
     }
 }
 
+async fn confirm_discord(
+    stage: RwSignal<Stage>,
+    sign_in: impl Fn(Account) + Copy + 'static,
+    request: DiscordWebConfirmRequest,
+) {
+    stage.set(Stage::Busy("Signing in with Discord…"));
+    let message = match api_post::<_, Account>("/api/auth/discord/web/confirm", &request).await {
+        Ok(account) => return sign_in(account),
+        Err(FetchError::Status(400)) => {
+            "That Discord sign-in expired or was started in another browser. Please try again."
+                .to_string()
+        }
+        Err(FetchError::Status(401)) => {
+            "Discord didn't accept that sign-in. Please try again.".to_string()
+        }
+        Err(err) => format!("Couldn't sign in with Discord ({err})."),
+    };
+    stage.set(Stage::EmailForm(Some(message)));
+}
+
 #[cfg(feature = "discord-activity")]
 async fn activity_sign_in(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Copy + 'static) {
     stage.set(Stage::Busy("Signing in with Discord…"));
@@ -225,17 +314,49 @@ async fn activity_sign_in(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Co
     }
 }
 
+/// What Discord sent the browser back to `/` with after a web sign-in.
+enum DiscordReturn {
+    /// `?code=…&state=…`: confirm with the server.
+    Code(DiscordWebConfirmRequest),
+    /// `?error=…&state=…`, e.g. `access_denied` when the user cancelled.
+    Error(String),
+}
+
+/// Reads a Discord web sign-in return from the URL (a `state` plus either
+/// `code` or `error`) and removes the query string, so a reload doesn't
+/// replay it.
+fn take_discord_return() -> Option<DiscordReturn> {
+    let params = query_params()?;
+    let state = params.get("state")?;
+    let found = match (params.get("code"), params.get("error")) {
+        (Some(code), _) => DiscordReturn::Code(DiscordWebConfirmRequest { code, state }),
+        (None, Some(error)) => DiscordReturn::Error(error),
+        (None, None) => return None,
+    };
+    clear_query();
+    Some(found)
+}
+
 /// Reads `login_code` from the URL and removes the query string, so a reload
 /// or a shared URL doesn't retry a consumed code.
 fn take_login_code() -> Option<String> {
-    let window = web_sys::window()?;
-    let search = window.location().search().ok()?;
-    let code = web_sys::UrlSearchParams::new_with_str(&search)
-        .ok()?
-        .get("login_code")?;
+    let code = query_params()?.get("login_code")?;
+    clear_query();
+    Some(code)
+}
+
+fn query_params() -> Option<web_sys::UrlSearchParams> {
+    let search = web_sys::window()?.location().search().ok()?;
+    web_sys::UrlSearchParams::new_with_str(&search).ok()
+}
+
+/// Drops the query string from the address bar without reloading.
+fn clear_query() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let path = window.location().pathname().unwrap_or_else(|_| "/".to_string());
     let _ = window
         .history()
         .and_then(|history| history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path)));
-    Some(code)
 }

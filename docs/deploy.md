@@ -73,12 +73,12 @@ Create the DNS records `fly certs add` prints (A/AAAA, or a CNAME to `webapp-exa
 
 ## Discord app setup
 
-Only for apps that run as a Discord activity (the `discord-activity` Cargo feature; the example enables it). Once per Discord application, in the [Developer Portal](https://discord.com/developers/applications):
+For apps with Discord sign-in: setting `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` turns on "Sign in with Discord" on the website, and (with the `discord-activity` Cargo feature, which the example enables) activity sign-in. Once per Discord application, in the [Developer Portal](https://discord.com/developers/applications):
 
-1. **Activities → Settings:** enable Activities.
-2. **Activities → URL Mappings:** Root Mapping prefix `/` → target host **without** `https://`: the Fly host (`webapp-example.fly.dev`) or the custom domain in production, and the dev tunnel host (`webapp-dev.fadetovoid.win`) in development. No proxy path mappings are needed, because everything is served from one origin and the Discord SDK is bundled.
-3. **OAuth2 → Redirects:** add the placeholder `https://127.0.0.1`. Discord requires a registered redirect URI even though the Embedded App SDK never uses it. Without one, sign-in fails with `invalid_request: Missing "redirect_uri"`.
-4. **OAuth2:** copy the Client ID and Client Secret into `.env` (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`) and into the Fly secrets.
+1. **OAuth2 → Redirects:** add `{PUBLIC_BASE_URL}/` for every environment whose website uses this Discord app, exactly as `PUBLIC_BASE_URL` is set plus a trailing `/`: e.g. `http://localhost:8080/` for local dev and `https://webapp-example.fly.dev/` (or the custom domain) in production. Discord web sign-in redirects back there; an unregistered one makes Discord show "Invalid OAuth2 redirect_uri". Discord matches the string exactly, and the portal will save a pasted leading or trailing space as part of the URL, so check for those. (The activity's SDK `authorize` never uses a redirect, but fails with `invalid_request: Missing "redirect_uri"` unless at least one is registered. An activity-only Discord app can use the placeholder `https://127.0.0.1`.)
+2. **OAuth2:** copy the Client ID and Client Secret into `.env` (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`) and into the Fly secrets.
+3. **Activities → Settings** (activity apps only): enable Activities.
+4. **Activities → URL Mappings** (activity apps only): Root Mapping prefix `/` → target host **without** `https://`: the Fly host (`webapp-example.fly.dev`) or the custom domain in production, and the dev tunnel host (`webapp-dev.fadetovoid.win`) in development. No proxy path mappings are needed, because everything is served from one origin and the Discord SDK is bundled.
 
 **Dev vs. production mapping:** a Discord app has a single Root Mapping. For the example, repoint it temporarily to test production, then point it back to the tunnel. For a real app, keep the production app's mapping on production, and create a second Discord app (with its own client ID and secret) for development.
 
@@ -91,9 +91,9 @@ Only for apps that run as a Discord activity (the `discord-activity` Cargo featu
 | `REDIS_KEY_PREFIX` | no | no | secret or `[env]` | Namespace for every key, to share one DB between apps or environments (the example uses none) |
 | `RESEND_API_KEY` | for email login | yes | secret | Send login emails via Resend |
 | `RESEND_FROM_EMAIL` | with `RESEND_API_KEY` | no | secret | Sender address on a Resend-verified domain |
-| `PUBLIC_BASE_URL` | for email login | no | `[env]` | Origin the emailed login link points at |
+| `PUBLIC_BASE_URL` | for email or Discord login | no | `[env]` | Origin users reach the site at: the emailed login link and the Discord web sign-in redirect (`{PUBLIC_BASE_URL}/`) are built from it |
 | `APP_NAME` | no (default `webapp`) | no | `[env]` | Shown in the login email subject and body |
-| `DISCORD_CLIENT_ID` | for Discord activity login (set both or neither) | no | secret | Discord application ID |
+| `DISCORD_CLIENT_ID` | for Discord login, web and activity (set both or neither) | no | secret | Discord application ID |
 | `DISCORD_CLIENT_SECRET` | with `DISCORD_CLIENT_ID` | yes | secret | Discord OAuth2 secret |
 | `DEV_MODE` | no | no | local only | `1` with no Resend key prints login links to the console. **Never set in production.** |
 | `BIND_ADDR` | no | no | image | Listen address (`0.0.0.0:8080` in the image; `127.0.0.1:3000` default locally) |

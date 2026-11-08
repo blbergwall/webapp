@@ -8,12 +8,15 @@ pub struct Config {
     /// Prepended to every Redis key (`REDIS_KEY_PREFIX`), so several apps can
     /// share one Upstash database. Empty when unset.
     pub key_prefix: String,
-    /// `None` disables Discord activity login.
+    /// `None` disables Discord login (web, and activity with the
+    /// `discord-activity` feature).
     pub discord: Option<DiscordConfig>,
     /// Shown to users, e.g. in the login email subject (`APP_NAME`).
     pub app_name: String,
-    /// Origin the emailed login link points at (`PUBLIC_BASE_URL`), e.g.
-    /// `https://example.com`. Required when email login is enabled.
+    /// Origin users reach the site at (`PUBLIC_BASE_URL`), e.g.
+    /// `https://example.com`, without a trailing slash. The emailed login link
+    /// and the Discord web sign-in's redirect URI (`{PUBLIC_BASE_URL}/`) are
+    /// built from it. Required when email or Discord login is enabled.
     pub public_base_url: Option<String>,
     pub email: EmailDelivery,
 }
@@ -58,6 +61,9 @@ impl Config {
         let public_base_url = optional("PUBLIC_BASE_URL").map(|url| url.trim_end_matches('/').to_string());
         if !matches!(email, EmailDelivery::Disabled) && public_base_url.is_none() {
             bail!("PUBLIC_BASE_URL is required when email login is enabled");
+        }
+        if discord.is_some() && public_base_url.is_none() {
+            bail!("PUBLIC_BASE_URL is required when DISCORD_CLIENT_ID is set (Discord web sign-in redirects to it)");
         }
 
         Ok(Self {

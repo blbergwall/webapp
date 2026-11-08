@@ -38,6 +38,11 @@ pub const SESSION_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 #[cfg(feature = "discord-activity")]
 pub const ACTIVITY_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 
+/// Lifetime of the `discord_state` cookie: how long a Discord web sign-in
+/// may take between "Sign in with Discord" and returning to the site. A
+/// cookie, not a Redis record, so it has no prefix.
+pub const DISCORD_STATE_TTL_SECS: u64 = 10 * 60;
+
 /// `FL<code>` — a one-time email login code: JSON `{email, pending}`.
 /// Consumed with `GETDEL`.
 pub const LOGIN_CODE: &str = "FL";

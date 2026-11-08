@@ -19,7 +19,8 @@ pub(crate) async fn login(
         return Err(ApiError::BadRequest);
     }
 
-    let access_token = discord::exchange_code(&app, config, code).await?;
+    // The SDK's `authorize` has no redirect URI, so the exchange sends none.
+    let access_token = discord::exchange_code(&app, config, code, None).await?;
     let user = discord::fetch_user(&app, &access_token).await?;
 
     let account =

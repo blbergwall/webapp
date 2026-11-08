@@ -12,21 +12,25 @@ pub const PENDING_LOGIN_COOKIE: &str = "pending_login";
 
 /// Marks a Discord activity session's token, so its (shorter) TTL can be
 /// chosen from the token alone, without another Redis round trip.
-pub const DISCORD_TOKEN_PREFIX: &str = "dc_";
+#[cfg(feature = "discord-activity")]
+pub const ACTIVITY_TOKEN_PREFIX: &str = "dc_";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SessionKind {
-    /// Cookie session from email login.
+    /// Cookie session from a website sign-in.
     Website,
-    /// Bearer-token session from Discord activity login.
-    Discord,
+    /// Bearer-token session from Discord activity sign-in
+    /// (`discord-activity` feature).
+    #[cfg(feature = "discord-activity")]
+    Activity,
 }
 
 /// Creates a session for `account_id` and returns its token.
 pub async fn create(redis: &Redis, account_id: &str, kind: SessionKind) -> Result<String> {
     let token = match kind {
         SessionKind::Website => random_hex(32),
-        SessionKind::Discord => format!("{DISCORD_TOKEN_PREFIX}{}", random_hex(32)),
+        #[cfg(feature = "discord-activity")]
+        SessionKind::Activity => format!("{ACTIVITY_TOKEN_PREFIX}{}", random_hex(32)),
     };
     redis
         .set_ex(&session_key(&token), account_id, ttl_secs(&token))
@@ -41,12 +45,13 @@ pub async fn resolve(redis: &Redis, token: &str) -> Result<Option<String>> {
 }
 
 /// The sliding TTL for a session, by the kind its token encodes.
+#[cfg_attr(not(feature = "discord-activity"), allow(unused_variables))]
 fn ttl_secs(token: &str) -> u64 {
-    if token.starts_with(DISCORD_TOKEN_PREFIX) {
-        keys::DISCORD_SESSION_TTL_SECS
-    } else {
-        keys::SESSION_TTL_SECS
+    #[cfg(feature = "discord-activity")]
+    if token.starts_with(ACTIVITY_TOKEN_PREFIX) {
+        return keys::ACTIVITY_SESSION_TTL_SECS;
     }
+    keys::SESSION_TTL_SECS
 }
 
 pub async fn delete(redis: &Redis, token: &str) -> Result<()> {
@@ -137,7 +142,8 @@ mod tests {
     #[test]
     fn ttl_by_token_kind() {
         assert_eq!(ttl_secs("abc123"), keys::SESSION_TTL_SECS);
-        assert_eq!(ttl_secs("dc_abc123"), keys::DISCORD_SESSION_TTL_SECS);
+        #[cfg(feature = "discord-activity")]
+        assert_eq!(ttl_secs("dc_abc123"), keys::ACTIVITY_SESSION_TTL_SECS);
     }
 
     #[test]

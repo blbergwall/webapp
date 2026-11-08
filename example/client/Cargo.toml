@@ -6,5 +6,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-webapp-client = { workspace = true, features = ["ws"] }
+webapp-client = { workspace = true, features = ["ws", "discord-activity"] }
 leptos.workspace = true

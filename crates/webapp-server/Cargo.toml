@@ -21,3 +21,7 @@ tokio.workspace = true
 # Authenticated WebSocket support: `ws_router()` (ticket endpoint) and the
 # `WsAuth` extractor. Turns on axum's `ws` feature.
 ws = ["axum/ws", "webapp-common/ws"]
+# Discord activity sign-in: `POST /api/auth/discord`, bearer-token sessions
+# (24-hour TTL) and `Authorization: Bearer` in `Auth`. Pairs with
+# webapp-client's `discord-activity` feature.
+discord-activity = ["webapp-common/discord-activity"]

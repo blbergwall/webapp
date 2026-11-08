@@ -11,3 +11,6 @@ serde.workspace = true
 # Types for the WebSocket ticket endpoint; enabled by the server/client `ws`
 # features.
 ws = []
+# Types for Discord activity sign-in; enabled by the server/client
+# `discord-activity` features.
+discord-activity = []

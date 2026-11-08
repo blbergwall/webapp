@@ -1,6 +1,11 @@
 //! Server-side auth framework: axum routes, the `Auth` extractor, Upstash
 //! Redis REST storage, email (Resend) and Discord login.
 //!
+//! Optional Cargo features (both off by default):
+//! - `discord-activity`: Discord activity sign-in (`POST /api/auth/discord`)
+//!   and the bearer-token sessions it issues.
+//! - `ws`: authenticated WebSockets ([`ws_router`], `WsAuth`).
+//!
 //! Wiring it into an app:
 //!
 //! ```ignore
@@ -15,6 +20,8 @@
 //! `FromRef<AppState> for WebApp`.
 
 pub mod account;
+#[cfg(feature = "discord-activity")]
+mod activity;
 mod auth;
 mod config;
 mod discord;
@@ -84,19 +91,22 @@ impl WebApp {
 }
 
 /// The framework's `/api/auth/*` routes, ready to `merge` into an app router
-/// whose state provides a `WebApp`.
+/// whose state provides a `WebApp`. `POST /api/auth/discord` is only included
+/// with the `discord-activity` feature.
 pub fn auth_router<S>() -> Router<S>
 where
     WebApp: FromRef<S>,
     S: Clone + Send + Sync + 'static,
 {
-    Router::new()
+    let router = Router::new()
         .route("/api/auth/config", get(auth::config))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/logout", post(auth::logout))
-        .route("/api/auth/discord", post(discord::login))
         .route("/api/auth/email/start", post(email::start))
-        .route("/api/auth/email/confirm", post(email::confirm))
+        .route("/api/auth/email/confirm", post(email::confirm));
+    #[cfg(feature = "discord-activity")]
+    let router = router.route("/api/auth/discord", post(activity::login));
+    router
 }
 
 /// The WebSocket ticket endpoint (`POST /api/auth/ws-ticket`, `ws` feature).

@@ -26,16 +26,17 @@ pub const IDENTITY_DISCORD: &str = "FD";
 
 /// `FS<token>` — session: value is the `account_id`. Sliding TTL, refreshed
 /// (via `GETEX`, in the same command as the read) on every authenticated
-/// request. Discord sessions' tokens start with
-/// `session::DISCORD_TOKEN_PREFIX`, which selects the shorter TTL.
+/// request. Discord activity sessions' tokens (`discord-activity` feature)
+/// start with `dc_`, which selects the shorter TTL.
 pub const SESSION: &str = "FS";
 /// Sliding TTL of a website (cookie) session: keeps users signed in across
 /// visits.
 pub const SESSION_TTL_SECS: u64 = 90 * 24 * 60 * 60;
-/// Sliding TTL of a Discord activity session. Its token only lives in the
-/// activity's memory and every launch signs in afresh, so an unused session
-/// is abandoned; this short TTL cleans it up.
-pub const DISCORD_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
+/// Sliding TTL of a Discord activity session (`discord-activity` feature).
+/// Its token only lives in the activity's memory and every launch signs in
+/// afresh, so an unused session is abandoned; this short TTL cleans it up.
+#[cfg(feature = "discord-activity")]
+pub const ACTIVITY_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// `FL<code>` — a one-time email login code: JSON `{email, pending}`.
 /// Consumed with `GETDEL`.

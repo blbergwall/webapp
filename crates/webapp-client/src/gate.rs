@@ -1,19 +1,16 @@
-//! `<AuthGate>`: sign-in UI for both modes, rendering its children once
-//! signed in.
+//! `<AuthGate>`: sign-in UI for website mode and (with the
+//! `discord-activity` feature) Discord activity mode, rendering its children
+//! once signed in.
 //!
 //! The views are plain semantic HTML with `webapp-*` classes and no built-in
 //! styles; apps style them.
 
 use leptos::{ev::SubmitEvent, prelude::*, task::spawn_local};
-use webapp_common::{
-    Account, AuthConfig, DiscordLoginRequest, DiscordLoginResponse, EmailConfirmRequest,
-    EmailStartRequest,
-};
+use webapp_common::{Account, EmailConfirmRequest, EmailStartRequest};
 
-use crate::{
-    api::{FetchError, api_get, api_post, set_token},
-    discord,
-};
+use crate::api::{FetchError, api_get, api_post};
+#[cfg(feature = "discord-activity")]
+use crate::discord;
 
 /// Available to everything inside `<AuthGate>` via [`use_auth`].
 #[derive(Clone, Copy)]
@@ -43,20 +40,25 @@ enum Stage {
     /// Website mode: the link was opened in a different browser than the one
     /// that requested it, so ask before consuming the code.
     FinishSignIn(String),
-    /// Discord mode: not signed in, optionally after an error.
-    DiscordSignedOut(Option<String>),
+    /// Activity mode: not signed in, optionally after an error.
+    #[cfg(feature = "discord-activity")]
+    ActivitySignedOut(Option<String>),
     SignedIn,
 }
 
 /// Shows sign-in UI until the user is signed in, then renders `children`
 /// with an [`AuthContext`] available through [`use_auth`].
 ///
-/// Inside a Discord activity it signs in with Discord automatically; on a
-/// plain website it uses email magic links (including handling the
-/// `?login_code=` the emailed link opens with).
+/// On a plain website it uses email magic links (including handling the
+/// `?login_code=` the emailed link opens with). With the `discord-activity`
+/// feature, inside a Discord activity it signs in with Discord automatically
+/// instead.
 #[component]
 pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
-    let in_discord = discord::is_discord_activity();
+    #[cfg(feature = "discord-activity")]
+    let in_activity = discord::is_discord_activity();
+    #[cfg(not(feature = "discord-activity"))]
+    let in_activity = false;
     let stage = RwSignal::new(Stage::Busy("Loading…"));
     // Keeps the last signed-in account after logout, so `AuthContext.account`
     // never has to be optional for code that briefly outlives a sign-out.
@@ -71,13 +73,15 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
         spawn_local(async move {
             // Best effort: the local sign-out happens regardless.
             let _ = api_post::<_, ()>("/api/auth/logout", &serde_json::json!({})).await;
-            set_token(None);
-            discord::set_access_token(None);
-            stage.set(if in_discord {
-                Stage::DiscordSignedOut(None)
+            if in_activity {
+                #[cfg(feature = "discord-activity")]
+                {
+                    discord::sign_out();
+                    stage.set(Stage::ActivitySignedOut(None));
+                }
             } else {
-                Stage::EmailForm(None)
-            });
+                stage.set(Stage::EmailForm(None));
+            }
         });
     });
 
@@ -90,8 +94,9 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
         logout,
     });
 
-    if in_discord {
-        spawn_local(discord_sign_in(stage, sign_in));
+    if in_activity {
+        #[cfg(feature = "discord-activity")]
+        spawn_local(activity_sign_in(stage, sign_in));
     } else {
         spawn_local(website_start(stage, sign_in));
     }
@@ -118,10 +123,11 @@ pub fn AuthGate(children: ChildrenFn) -> impl IntoView {
             }
             .into_any()
         }
-        Stage::DiscordSignedOut(error) => view! {
+        #[cfg(feature = "discord-activity")]
+        Stage::ActivitySignedOut(error) => view! {
             <div class="webapp-login">
                 {error.map(|message| view! { <p class="webapp-error">{message}</p> })}
-                <button on:click=move |_| spawn_local(discord_sign_in(stage, sign_in))>
+                <button on:click=move |_| spawn_local(activity_sign_in(stage, sign_in))>
                     "Sign in with Discord"
                 </button>
             </div>
@@ -210,31 +216,13 @@ async fn confirm_email(
     }
 }
 
-async fn discord_sign_in(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Copy + 'static) {
+#[cfg(feature = "discord-activity")]
+async fn activity_sign_in(stage: RwSignal<Stage>, sign_in: impl Fn(Account) + Copy + 'static) {
     stage.set(Stage::Busy("Signing in with Discord…"));
-    match discord_login().await {
-        Ok(response) => {
-            set_token(Some(response.token));
-            discord::set_access_token(Some(response.discord_access_token));
-            sign_in(response.account);
-        }
-        Err(message) => stage.set(Stage::DiscordSignedOut(Some(message))),
+    match discord::sign_in().await {
+        Ok(account) => sign_in(account),
+        Err(message) => stage.set(Stage::ActivitySignedOut(Some(message))),
     }
-}
-
-async fn discord_login() -> Result<DiscordLoginResponse, String> {
-    let config: AuthConfig = api_get("/api/auth/config")
-        .await
-        .map_err(|err| format!("Couldn't reach the server ({err})."))?;
-    let client_id = config
-        .discord_client_id
-        .ok_or("Discord sign-in isn't configured on this server.")?;
-    let code = discord::authorize(&client_id)
-        .await
-        .map_err(|err| format!("Discord sign-in was cancelled or failed ({err})."))?;
-    api_post("/api/auth/discord", &DiscordLoginRequest { code })
-        .await
-        .map_err(|err| format!("Sign-in failed ({err})."))
 }
 
 /// Reads `login_code` from the URL and removes the query string, so a reload

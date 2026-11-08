@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-webapp-server = { workspace = true, features = ["ws"] }
+webapp-server = { workspace = true, features = ["ws", "discord-activity"] }
 axum = { workspace = true, features = ["ws"] }
 dotenvy.workspace = true
 tokio.workspace = true

@@ -1,6 +1,6 @@
 # Implementation Guide
 
-For applications built on the **webapp** framework: a Rust/axum server and a Leptos/WASM client that run as a plain website (email magic-link login) or as a Discord activity (Discord login), with accounts and sessions in Upstash Redis.
+For applications built on the **webapp** framework: a Rust/axum server and a Leptos/WASM client that run as a plain website (email magic-link login) and, optionally, as a Discord activity (Discord login; the `discord-activity` feature, §4), with accounts and sessions in Upstash Redis.
 
 This guide covers what an app needs to know. The framework's own design decisions are in `docs/completed-research/20261009-web-app-framework.md`; deployment is in [`deploy.md`](deploy.md). `example/` is a complete, working app to copy from.
 
@@ -13,8 +13,8 @@ Pick a dependency style:
 | Style | `Cargo.toml` | When |
 |---|---|---|
 | Local path | `webapp-server = { path = "../webapp/crates/webapp-server" }` | Developing the app and the framework together; always the current working copy, no version pinning. |
-| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.1.0" }` | Local builds pinned to a tagged, committed version. |
-| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.1.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
+| Local git, pinned | `webapp-server = { git = "file:///C:/Data/Dropbox/dev/rust/webapp", tag = "v0.2.0" }` | Local builds pinned to a tagged, committed version. |
+| Git host, pinned | `webapp-server = { git = "https://github.com/blbergwall/webapp", tag = "v0.2.0" }` | Required for deployment: Fly's remote builder only receives the app's folder, so path and `file://` dependencies don't exist there. |
 
 The framework is published at `https://github.com/blbergwall/webapp` (public, so builds fetch it without credentials). Tags are `vX.Y.Z` and never move once pushed. To pick up a new release, change `tag` on both dependencies and run `cargo update -p webapp-server -p webapp-client`.
 
@@ -31,6 +31,13 @@ With the patch:
 - `Cargo.lock` records the patched crates as path packages, with no git commit. The `tag` in `Cargo.toml` is the pin. The Docker build, which has no patch, re-resolves them to the tag. So don't add `--locked` to the Dockerfile's `cargo build`, or that re-resolve fails.
 
 Use the same `axum` (0.8) and `leptos` (0.8, `csr`) major versions as the framework.
+
+Optional Cargo features, all off by default, are enabled on **both** dependencies (e.g. `features = ["ws", "discord-activity"]`):
+
+| Feature | Adds |
+|---|---|
+| `discord-activity` | Running as a Discord activity with Discord sign-in (§4) |
+| `ws` | Authenticated WebSockets (§5) |
 
 ## 2. Server
 
@@ -54,7 +61,7 @@ async fn list_things(Auth(account): Auth) -> Result<Json<Vec<Thing>>, ApiError> 
 - **App state:** an app with its own state type keeps a `WebApp` inside it and implements `FromRef<AppState> for WebApp`. `auth_router()` and `Auth` then work unchanged.
 - **Errors:** return `ApiError`. Any `anyhow::Error` converts with `?` into a logged, generic 500, so details never reach the client. The other variants map to 400/401/403/404/409/410/429.
 - **CSRF rule:** a cookie-authenticated request with a method other than GET/HEAD/OPTIONS must send `Content-Type: application/json`, or `Auth` rejects it with 403. Design write endpoints to take JSON. The client helpers always send it.
-- **Sessions:** website sessions are a 90-day sliding cookie. Discord sessions are a 24-hour sliding bearer token. `Auth` accepts either.
+- **Sessions:** website sessions are a 90-day sliding cookie. (Discord activity sessions are bearer tokens; see §4.)
 - **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email or Discord ID. A website user and a Discord user are separate accounts unless linked (linking is planned, not built).
 
 ## 3. Client
@@ -73,13 +80,28 @@ fn Home() -> impl IntoView {
 }
 ```
 
-- `<AuthGate>` detects the mode (a `frame_id` query param means Discord), runs the sign-in flow, and renders its children only when signed in.
-- Call the app's API with `api_get` / `api_post` only. They attach the Discord bearer token and send JSON. An empty/204 response parses as `()`. Errors are `FetchError::Status(u16)` or `FetchError::Network(String)`.
+- `<AuthGate>` runs the sign-in flow (email magic link, or Discord inside an activity with the `discord-activity` feature) and renders its children only when signed in.
+- Call the app's API with `api_get` / `api_post` only. They send JSON (and the activity bearer token, if any). An empty/204 response parses as `()`. Errors are `FetchError::Status(u16)` or `FetchError::Network(String)`.
 - The sign-in views are unstyled HTML with `webapp-login`, `webapp-error` and `webapp-status` classes for the app's CSS to style.
-- `Trunk.toml` must keep `no_sri = true` and `no_autoreload = true` (Discord's proxy and CSP require them). It should output to `build/dist` and proxy `/api` to the local server. Copy `example/client/Trunk.toml`.
-- The Discord SDK ships inside `webapp-client` (no `index.html` changes, no CDN). Apps that need SDK commands beyond sign-in call `authenticate_discord_sdk()` after sign-in.
+- `Trunk.toml` should output to `build/dist` and proxy `/api` to the local server. Copy `example/client/Trunk.toml`; its `no_sri` and `no_autoreload` settings are only needed for Discord activities (§4).
 
-## 4. WebSockets (optional `ws` feature)
+## 4. Discord activity (optional `discord-activity` feature)
+
+Lets the app also run as a Discord activity (launched inside Discord and served through Discord's proxy), signing in with Discord. Off by default: without it, `<AuthGate>` is always in website mode, the Discord SDK isn't bundled (about 150 KB of JS the browser would otherwise load), there's no `POST /api/auth/discord`, and `Auth` ignores `Authorization: Bearer` headers. Enable it on both crates:
+
+```toml
+webapp-server = { ..., features = ["discord-activity"] }
+webapp-client = { ..., features = ["discord-activity"] }
+```
+
+- **Mode:** Discord adds a `frame_id` query param when it launches an activity. With it, `<AuthGate>` signs in with Discord automatically (the Embedded App SDK's `authorize`; the server exchanges the code and looks the user up itself). Without it, the same app is the normal website.
+- **Sessions:** a 24-hour sliding bearer token, held in WASM memory, because cookies are unreliable through Discord's proxy. `api_get` / `api_post` attach it, and `Auth` accepts it (bearer requests skip the CSRF rule, since browsers never attach them automatically). Every launch signs in afresh.
+- **SDK:** bundled inside `webapp-client` (no `index.html` changes, and no CDN, which Discord's CSP would block). Apps that need SDK commands beyond sign-in call `authenticate_discord_sdk()` after sign-in. `is_discord_activity()` tells the app which mode it's in.
+- **`Trunk.toml`:** keep `no_sri = true` (Discord's proxy rewrites URLs inside served JS, which breaks SRI hashes) and `no_autoreload = true` (Discord's CSP blocks trunk's reload WebSocket).
+- **Configuration:** set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`, and set up the Discord application (Activities, URL mapping, the placeholder redirect URI) as in [`deploy.md`](deploy.md). Without them, `/api/auth/discord` returns 404 and the activity shows an error.
+- Enable the feature on both crates. A client with it and a server without it gets a 404 at sign-in. A server with it and a client without it shows the email form inside Discord.
+
+## 5. WebSockets (optional `ws` feature)
 
 Realtime push in both modes, behind a Cargo feature that is off by default. Without it, nothing below is compiled and there is no extra endpoint or dependency. Enable it on both crates (and on the app's `axum`, for `axum::extract::ws`):
 
@@ -138,7 +160,7 @@ ws.status.get();        // WsStatus::Connecting | Open | Closed
   ws = true
   ```
 
-## 5. Database keys
+## 6. Database keys
 
 Every record in Redis starts with a **2-character type prefix**, e.g. `FA<account_id>`. Prefixes are owned by first letter, so the framework and apps can add record types independently without colliding:
 
@@ -165,6 +187,6 @@ Each app should keep its own prefixes in one documented module (like the framewo
 
 **Accessing Redis from an app:** use `webapp.redis()` (`Redis`). Its helpers (`get`, `getex`, `getdel`, `set`, `set_ex`, `set_nx_ex`, `del`) take **unprefixed** keys and add the optional `REDIS_KEY_PREFIX` namespace themselves. For any other command, build each key with `redis.key("AW123")` and pass it to `redis.command(&[...])`. The namespace prefix sits in front of the whole key (e.g. `myapp:AW123`) and is separate from the 2-character record prefix.
 
-## 6. Configuration and deployment
+## 7. Configuration and deployment
 
-All configuration comes from environment variables: `.env` locally (copy `.env.example`), and Fly secrets plus `fly.toml` `[env]` in production. See [`deploy.md`](deploy.md) for the variable reference, the Discord Developer Portal setup (including the required placeholder redirect URI), and how to adapt the `Dockerfile` / `fly.toml` for a new app.
+All configuration comes from environment variables: `.env` locally (copy `.env.example`), and Fly secrets plus `fly.toml` `[env]` in production. See [`deploy.md`](deploy.md) for the variable reference, the Discord Developer Portal setup for activity apps (including the required placeholder redirect URI), and how to adapt the `Dockerfile` / `fly.toml` for a new app.

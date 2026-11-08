@@ -15,9 +15,11 @@ use crate::{
 /// Extractor for the signed-in account. Put it on any handler that requires
 /// a session; unauthenticated requests are rejected with 401.
 ///
-/// Accepts `Authorization: Bearer <token>` (Discord activity mode) or the
-/// session cookie (website mode). A bearer header, when present, wins — an
-/// invalid one is a 401 with no fallback to the cookie.
+/// Accepts the session cookie (website mode) and, with the
+/// `discord-activity` feature, `Authorization: Bearer <token>` (Discord
+/// activity mode). A bearer header, when accepted and present, wins — an
+/// invalid one is a 401 with no fallback to the cookie. Without the feature
+/// the header is ignored.
 ///
 /// CSRF: a cookie-authenticated request with a state-changing method must
 /// send `Content-Type: application/json` (rejected with 403 otherwise).
@@ -52,12 +54,15 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TokenSource {
+    /// `Authorization: Bearer` (`discord-activity` feature).
+    #[cfg(feature = "discord-activity")]
     Bearer,
     Cookie,
 }
 
 /// The session token a request carries, and where it came from.
 pub(crate) fn session_token(headers: &HeaderMap) -> Option<(&str, TokenSource)> {
+    #[cfg(feature = "discord-activity")]
     if let Some(value) = headers.get(header::AUTHORIZATION) {
         let token = value.to_str().ok()?.strip_prefix("Bearer ")?.trim();
         return Some((token, TokenSource::Bearer));
@@ -65,9 +70,11 @@ pub(crate) fn session_token(headers: &HeaderMap) -> Option<(&str, TokenSource)> 
     session::cookie_value(headers, SESSION_COOKIE).map(|token| (token, TokenSource::Cookie))
 }
 
-/// Whether a request passes the CSRF rule described on [`Auth`].
+/// Whether a request passes the CSRF rule described on [`Auth`]. Only cookies
+/// need it: browsers attach them to cross-site requests automatically, but
+/// never a bearer header.
 pub(crate) fn csrf_ok(method: &Method, headers: &HeaderMap, source: TokenSource) -> bool {
-    if source == TokenSource::Bearer
+    if source != TokenSource::Cookie
         || matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
     {
         return true;
@@ -129,6 +136,7 @@ mod tests {
         headers
     }
 
+    #[cfg(feature = "discord-activity")]
     #[test]
     fn bearer_token() {
         let headers = headers(&[(header::AUTHORIZATION, "Bearer abc")]);
@@ -141,6 +149,19 @@ mod tests {
         assert_eq!(session_token(&headers), Some(("xyz", TokenSource::Cookie)));
     }
 
+    #[cfg(not(feature = "discord-activity"))]
+    #[test]
+    fn bearer_ignored_without_activity_feature() {
+        let both = headers(&[
+            (header::AUTHORIZATION, "Bearer abc"),
+            (header::COOKIE, "session=xyz"),
+        ]);
+        assert_eq!(session_token(&both), Some(("xyz", TokenSource::Cookie)));
+        let bearer_only = headers(&[(header::AUTHORIZATION, "Bearer abc")]);
+        assert_eq!(session_token(&bearer_only), None);
+    }
+
+    #[cfg(feature = "discord-activity")]
     #[test]
     fn bearer_wins_over_cookie() {
         let headers = headers(&[
@@ -150,6 +171,7 @@ mod tests {
         assert_eq!(session_token(&headers), Some(("abc", TokenSource::Bearer)));
     }
 
+    #[cfg(feature = "discord-activity")]
     #[test]
     fn non_bearer_authorization_does_not_fall_back_to_cookie() {
         let headers = headers(&[
@@ -169,6 +191,7 @@ mod tests {
         assert!(csrf_ok(&Method::GET, &HeaderMap::new(), TokenSource::Cookie));
     }
 
+    #[cfg(feature = "discord-activity")]
     #[test]
     fn csrf_allows_bearer_writes_without_json() {
         assert!(csrf_ok(&Method::POST, &HeaderMap::new(), TokenSource::Bearer));

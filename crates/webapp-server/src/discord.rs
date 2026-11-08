@@ -1,15 +1,19 @@
-//! Discord activity login: exchanges the Embedded App SDK's OAuth2 code for
-//! the user's identity, ported from `full-rust`.
+//! Discord OAuth2 core, shared by every Discord sign-in: exchanges an
+//! authorization code for an access token and looks up the user. Ported from
+//! `full-rust`.
 //!
-//! The client only ever supplies the code. Who the user is comes solely from
-//! `users/@me`, called with an access token this server obtained itself.
+//! Who the user is comes solely from `users/@me`, called with an access token
+//! this server obtained itself; the client only ever supplies the code.
+//!
+//! Today only Discord activity sign-in (`activity.rs`, `discord-activity`
+//! feature) calls this. It stays compiled without that feature because the
+//! planned web "Log in with Discord" builds on it too.
+#![cfg_attr(not(feature = "discord-activity"), allow(dead_code))]
 
 use anyhow::{Context, anyhow};
-use axum::{Json, extract::State};
 use serde::Deserialize;
-use webapp_common::{DiscordLoginRequest, DiscordLoginResponse};
 
-use crate::{WebApp, account, config::DiscordConfig, error::ApiError, session};
+use crate::{WebApp, config::DiscordConfig, error::ApiError};
 
 const TOKEN_URL: &str = "https://discord.com/api/oauth2/token";
 const USER_URL: &str = "https://discord.com/api/users/@me";
@@ -26,15 +30,15 @@ struct TokenError {
 
 /// The fields of Discord's user object this framework uses.
 #[derive(Debug, Deserialize)]
-struct DiscordUser {
-    id: String,
+pub(crate) struct DiscordUser {
+    pub(crate) id: String,
     username: String,
     global_name: Option<String>,
 }
 
 impl DiscordUser {
     /// Discord's display name if the user set one, else their username.
-    fn display_name(&self) -> &str {
+    pub(crate) fn display_name(&self) -> &str {
         self.global_name
             .as_deref()
             .filter(|name| !name.trim().is_empty())
@@ -42,38 +46,15 @@ impl DiscordUser {
     }
 }
 
-/// `POST /api/auth/discord` — signs in with a Discord OAuth2 code, creating
-/// the account on first login. Returns a bearer session token (no cookie:
-/// cookies are unreliable inside the activity iframe).
-pub(crate) async fn login(
-    State(app): State<WebApp>,
-    Json(request): Json<DiscordLoginRequest>,
-) -> Result<Json<DiscordLoginResponse>, ApiError> {
-    let discord = app.config().discord.as_ref().ok_or(ApiError::NotFound)?;
-    let code = request.code.trim();
-    if code.is_empty() {
-        return Err(ApiError::BadRequest);
-    }
-
-    let access_token = exchange_code(&app, discord, code).await?;
-    let user = fetch_user(&app, &access_token).await?;
-
-    let account =
-        account::find_or_create_by_discord(app.redis(), &user.id, user.display_name()).await?;
-    let token = session::create(app.redis(), &account.id, session::SessionKind::Discord).await?;
-
-    Ok(Json(DiscordLoginResponse {
-        token,
-        discord_access_token: access_token,
-        account,
-    }))
-}
-
 /// Exchanges an authorization code for an access token. A code Discord
 /// rejects (`invalid_grant`: expired, reused or forged) is a 401; anything
 /// else — including `invalid_client`, i.e. wrong server credentials — is a
 /// logged 500.
-async fn exchange_code(app: &WebApp, discord: &DiscordConfig, code: &str) -> Result<String, ApiError> {
+pub(crate) async fn exchange_code(
+    app: &WebApp,
+    discord: &DiscordConfig,
+    code: &str,
+) -> Result<String, ApiError> {
     let response = app
         .http()
         .post(TOKEN_URL)
@@ -107,7 +88,8 @@ async fn exchange_code(app: &WebApp, discord: &DiscordConfig, code: &str) -> Res
     Err(anyhow!("Discord token exchange failed with status {status}: {body}").into())
 }
 
-async fn fetch_user(app: &WebApp, access_token: &str) -> Result<DiscordUser, ApiError> {
+/// The Discord user an access token belongs to (`users/@me`).
+pub(crate) async fn fetch_user(app: &WebApp, access_token: &str) -> Result<DiscordUser, ApiError> {
     let response = app
         .http()
         .get(USER_URL)

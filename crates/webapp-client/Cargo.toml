@@ -34,3 +34,7 @@ ws = [
     "web-sys/MessageEvent",
     "web-sys/WebSocket",
 ]
+# Discord activity mode in `<AuthGate>`: the bundled Embedded App SDK, Discord
+# sign-in and the in-memory bearer token. Pairs with webapp-server's
+# `discord-activity` feature.
+discord-activity = ["webapp-common/discord-activity"]

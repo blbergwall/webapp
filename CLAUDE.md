@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**webapp** is a reusable framework for Rust web apps that run either as a **plain website** or as a **Discord activity**, with authentication handled for both:
+**webapp** is a reusable framework for Rust web apps that run as a **plain website** and, optionally (the `discord-activity` Cargo feature), as a **Discord activity**, with authentication handled for both:
 
 - **Website mode:** passwordless email (magic-link) login, with the session in an HttpOnly cookie.
 - **Discord activity mode:** Discord Embedded App SDK `authorize` → server-side code exchange, with the session token held in WASM memory and sent as `Authorization: Bearer`.
@@ -66,10 +66,16 @@ cargo test
 # Type-check a client crate
 cargo check -p example-client --target wasm32-unknown-unknown
 
-# The optional `ws` feature: check the library crates both without and with it
-cargo check -p webapp-server && cargo test -p webapp-server --features ws
+# The optional `ws` and `discord-activity` features: check and test the library
+# crates in all four combinations (none, ws, discord-activity, both)
+cargo test -p webapp-server
+cargo test -p webapp-server --features ws
+cargo test -p webapp-server --features discord-activity
+cargo test -p webapp-server --features ws,discord-activity
 cargo check -p webapp-client --target wasm32-unknown-unknown
 cargo check -p webapp-client --target wasm32-unknown-unknown --features ws
+cargo check -p webapp-client --target wasm32-unknown-unknown --features discord-activity
+cargo check -p webapp-client --target wasm32-unknown-unknown --features ws,discord-activity
 
 # Run the example server (workspace root); binds BIND_ADDR, default 127.0.0.1:3000
 cargo run -p example-server
@@ -85,7 +91,7 @@ Prerequisites: `rustup target add wasm32-unknown-unknown` and `cargo install tru
 
 **Configuration:** copy `.env.example` to `.env` (gitignored) at the repo root and fill it in. The example server loads it with `dotenvy`; the framework itself only reads environment variables (`webapp_server::Config::from_env`). Local dev uses its own Upstash database, separate from other projects.
 
-**Live Redis tests:** `cargo test -p webapp-server --features ws -- --ignored` runs the tests in `crates/webapp-server/src/live_tests.rs` against the Upstash DB in `.env`. Each run uses a random key prefix (`webapp-test:<hex>:`) and deletes its keys afterwards. Plain `cargo test` skips them.
+**Live Redis tests:** `cargo test -p webapp-server --features ws,discord-activity -- --ignored` runs the tests in `crates/webapp-server/src/live_tests.rs` against the Upstash DB in `.env`. Each run uses a random key prefix (`webapp-test:<hex>:`) and deletes its keys afterwards. Plain `cargo test` skips them.
 
 **Local dev runs two processes. Open `http://localhost:8080`:**
 - `cargo run -p example-server` runs the backend (axum, native Rust) on `:3000`: `/health` and `/api/*`. Restart it after server code changes.
@@ -132,8 +138,9 @@ The repo is public on GitHub: `https://github.com/blbergwall/webapp`, default br
 ## Framework API Conventions (`webapp-server`)
 
 - Apps hold a `WebApp` (config + Redis client, cheap to clone) in their axum state and `merge(webapp_server::auth_router())`. Both the router and the `Auth` extractor work for any state `S` where `WebApp: FromRef<S>`.
-- `Auth(account)` on a handler means a session is required. The bearer header wins over the cookie, and an invalid bearer is a 401 with no cookie fallback.
-- **Session TTLs (sliding; the `GETEX` read also refreshes, in one command):** website (cookie) sessions last 90 days; Discord sessions last 24 hours. Discord tokens are prefixed `dc_`, which selects the TTL without an extra lookup. Every activity launch signs in afresh and its in-memory token dies with the activity, so the short TTL clears abandoned sessions.
+- `Auth(account)` on a handler means a session is required. With `discord-activity`, the bearer header wins over the cookie, and an invalid bearer is a 401 with no cookie fallback. Without it, the `Authorization` header is ignored and only the cookie counts.
+- **Session TTLs (sliding; the `GETEX` read also refreshes, in one command):** website (cookie) sessions last 90 days; activity sessions (`SessionKind::Activity`) last 24 hours. Activity tokens are prefixed `dc_`, which selects the TTL without an extra lookup. Every activity launch signs in afresh and its in-memory token dies with the activity, so the short TTL clears abandoned sessions.
+- **Discord activity (`discord-activity` Cargo feature, off by default on `webapp-server`, `webapp-client` and `webapp-common`):** gates `POST /api/auth/discord` (`activity.rs`), the bearer branch of `Auth` (and its CSRF exemption), `SessionKind::Activity`, `ACTIVITY_SESSION_TTL_SECS`, the `DiscordLogin*` types, and on the client the SDK snippet, activity mode in `<AuthGate>` and the bearer token in the API helpers. The Discord OAuth core (`discord.rs`: code exchange, `users/@me`; `account::find_or_create_by_discord`; `FD`; `Account.discord_id`) stays unconditional, because the planned web "Log in with Discord" will share it; until then it carries `allow(dead_code)` without the feature.
 - **CSRF rule (enforced in `Auth`):** cookie-authenticated requests with a non-GET/HEAD/OPTIONS method must send `Content-Type: application/json`, otherwise 403. Clients must send JSON (even `{}`) on every write.
 - **Redis record prefixes (2 characters):** `F*` is reserved for the framework (all of them live in `keys.rs`, listed in `FRAMEWORK_PREFIXES`; a unit test enforces 2 chars, `F`-first, unique). `A*`–`E*` are reserved for applications. Other first letters are unassigned (e.g. for reusable crates). Any new framework record type must use an unused `F?` code and be added to `FRAMEWORK_PREFIXES` and to the table in `docs/implementation-guide.md`. `Redis` helpers apply the `REDIS_KEY_PREFIX` namespace automatically; raw `command()` calls must build keys with `redis.key(..)`.
 - `ApiError::Internal` logs the error and returns a generic 500. Never put error details in responses.
@@ -146,7 +153,7 @@ The repo is public on GitHub: `https://github.com/blbergwall/webapp`, default br
 | `GET /api/auth/config` | 200 `AuthConfig` | — |
 | `GET /api/auth/me` | 200 `Account` | 401 |
 | `POST /api/auth/logout` | 204, clears session cookie | 403 (CSRF) |
-| `POST /api/auth/discord {code}` | 200 `{token, discord_access_token, account}` (bearer token, no cookie) | 400 empty code, 401 Discord rejected the code (`invalid_grant`), 404 Discord not configured, 500 other Discord failures incl. bad credentials (logged) |
+| `POST /api/auth/discord {code}` (`discord-activity` feature) | 200 `{token, discord_access_token, account}` (bearer token, no cookie) | 400 empty code, 401 Discord rejected the code (`invalid_grant`), 404 Discord not configured, 500 other Discord failures incl. bad credentials (logged) |
 | `POST /api/auth/email/start {email}` | 204, sets `pending_login` cookie | 400 bad email, 429 rate-limited (2 min per IP), 404 email login disabled |
 | `POST /api/auth/email/confirm {code, auto}` | 200 `Account`, sets session cookie, clears `pending_login` | 410 code expired/used; 409 `auto` refused (not this browser, so the code is **not** consumed: show a "Finish signing in" button and retry with `auto: false`) |
 | `POST /api/auth/ws-ticket` (`ws` feature, `ws_router()`) | 200 `{ticket}` (single-use, 30 s) | 401, 403 (CSRF), 429 (over 20 per account per minute) |
@@ -155,16 +162,16 @@ The emailed link is `{PUBLIC_BASE_URL}/?login_code=<code>`. The SPA reads the co
 
 ## Framework API Conventions (`webapp-client`)
 
-- Wrap the signed-in part of the app in `<AuthGate>`. It detects the mode (`frame_id` query param → Discord), runs the matching sign-in flow, and renders its children only once signed in.
+- Wrap the signed-in part of the app in `<AuthGate>`. It detects the mode (with `discord-activity`, a `frame_id` query param → Discord; otherwise always website), runs the matching sign-in flow, and renders its children only once signed in.
 - Inside it, `use_auth()` returns `AuthContext {account: Signal<Account>, logout: Callback<()>}`.
-- Call the app's own endpoints with `api_get::<T>(path)` / `api_post::<B, T>(path, &body)`. They attach the Discord-mode bearer token, always send JSON (satisfying the CSRF rule), and map an empty/204 body to `null`, so `T = ()` works. Errors are `FetchError::Status(u16)` or `Network(String)`.
+- Call the app's own endpoints with `api_get::<T>(path)` / `api_post::<B, T>(path, &body)`. They attach the activity bearer token (if any), always send JSON (satisfying the CSRF rule), and map an empty/204 body to `null`, so `T = ()` works. Errors are `FetchError::Status(u16)` or `Network(String)`.
 - `connect_ws(path, on_message)` (`ws` feature) opens an authenticated same-origin WebSocket and returns a `Copy` `WsConnection {status: Signal<WsStatus>, send(&str) -> bool}`. It fetches a fresh ticket per attempt, reconnects with backoff (1 s up to 30 s with jitter, reset after 10 s stable, 30 s after a 429), stops on a 401 or when its owner is cleaned up, and sends `""` every 30 s as a keepalive under Fly's idle timeout. In dev, each WS route needs a `ws = true` proxy entry in `Trunk.toml`.
-- `authenticate_discord_sdk()` is for apps that need Discord SDK commands beyond sign-in.
+- `authenticate_discord_sdk()` and `is_discord_activity()` (`discord-activity` feature) are for apps that need Discord SDK commands beyond sign-in, or need to know the mode.
 - The sign-in views are unstyled semantic HTML with `webapp-*` classes (`webapp-login`, `webapp-error`, `webapp-status`); apps style them.
 
 ## Discord Activity: Known Quirks
 
-The Discord activity proxy (`{clientId}.discordsays.com`) rewrites URLs in served files and enforces a strict CSP. These choices exist because of that:
+All of this applies only to apps built with the `discord-activity` feature (the example enables it); website-only apps don't need the `Trunk.toml` settings below. The Discord activity proxy (`{clientId}.discordsays.com`) rewrites URLs in served files and enforces a strict CSP. These choices exist because of that:
 
 - **`no_sri = true`** in `Trunk.toml`: the proxy rewrites URLs inside JS, which breaks trunk's SRI hashes.
 - **`no_autoreload = true`** in `Trunk.toml`: trunk's reload WebSocket is blocked by the CSP.

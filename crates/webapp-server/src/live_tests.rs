@@ -86,15 +86,18 @@ async fn session_lifecycle_and_prefix() {
     session::delete(redis, &token).await.unwrap();
     assert_eq!(session::resolve(redis, &token).await.unwrap(), None);
 
-    // Discord sessions get the short TTL, on creation and on each refresh.
-    let token = session::create(redis, "acct2", SessionKind::Discord).await.unwrap();
-    assert!(token.starts_with(session::DISCORD_TOKEN_PREFIX));
-    let full_key = redis.key(&format!("{}{token}", keys::SESSION));
-    redis.command(&["EXPIRE", &full_key, "100"]).await.unwrap();
-    assert_eq!(session::resolve(redis, &token).await.unwrap().as_deref(), Some("acct2"));
-    let ttl = redis.command(&["TTL", &full_key]).await.unwrap().as_i64().unwrap();
-    let expected = keys::DISCORD_SESSION_TTL_SECS as i64;
-    assert!(ttl > expected - 60 && ttl <= expected, "ttl was {ttl}");
+    // Activity sessions get the short TTL, on creation and on each refresh.
+    #[cfg(feature = "discord-activity")]
+    {
+        let token = session::create(redis, "acct2", SessionKind::Activity).await.unwrap();
+        assert!(token.starts_with(session::ACTIVITY_TOKEN_PREFIX));
+        let full_key = redis.key(&format!("{}{token}", keys::SESSION));
+        redis.command(&["EXPIRE", &full_key, "100"]).await.unwrap();
+        assert_eq!(session::resolve(redis, &token).await.unwrap().as_deref(), Some("acct2"));
+        let ttl = redis.command(&["TTL", &full_key]).await.unwrap().as_i64().unwrap();
+        let expected = keys::ACTIVITY_SESSION_TTL_SECS as i64;
+        assert!(ttl > expected - 60 && ttl <= expected, "ttl was {ttl}");
+    }
 
     cleanup(&app).await;
 }

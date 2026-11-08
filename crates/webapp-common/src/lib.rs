@@ -25,13 +25,15 @@ pub struct AuthConfig {
 }
 
 /// Request body of `POST /api/auth/discord`: the OAuth2 code from the
-/// Embedded App SDK's `authorize` command.
+/// Embedded App SDK's `authorize` command (`discord-activity` feature).
+#[cfg(feature = "discord-activity")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscordLoginRequest {
     pub code: String,
 }
 
-/// Response body of `POST /api/auth/discord`.
+/// Response body of `POST /api/auth/discord` (`discord-activity` feature).
+#[cfg(feature = "discord-activity")]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscordLoginResponse {
     /// Session token: keep in memory and send as `Authorization: Bearer`.

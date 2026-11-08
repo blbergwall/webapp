@@ -63,7 +63,9 @@ pub(crate) async fn find_or_create_by_email(redis: &Redis, email: &str) -> Resul
 }
 
 /// The account for a Discord user, created on first sign-in with the given
-/// display name.
+/// display name. Shared by every Discord sign-in, so it stays compiled
+/// without the `discord-activity` feature (see `discord.rs`).
+#[cfg_attr(not(feature = "discord-activity"), allow(dead_code))]
 pub(crate) async fn find_or_create_by_discord(
     redis: &Redis,
     discord_id: &str,

@@ -1,11 +1,15 @@
-//! Discord Embedded App SDK access, via the bundled `js/discord.js` (a
-//! wasm-bindgen snippet: copied into `dist/snippets/` and imported with a
-//! relative path, so apps get it through this crate with no setup).
+//! Discord activity mode (`discord-activity` feature): the Embedded App SDK,
+//! via the bundled `js/discord.js` (a wasm-bindgen snippet: copied into
+//! `dist/snippets/` and imported with a relative path, so apps get it through
+//! this crate with no setup), and activity sign-in.
 
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 use web_sys::UrlSearchParams;
+use webapp_common::{Account, AuthConfig, DiscordLoginRequest, DiscordLoginResponse};
+
+use crate::api::{api_get, api_post, set_token};
 
 #[wasm_bindgen(module = "/js/discord.js")]
 extern "C" {
@@ -32,16 +36,39 @@ pub fn is_discord_activity() -> bool {
     UrlSearchParams::new_with_str(&search).is_ok_and(|params| params.has("frame_id"))
 }
 
+/// Signs in with Discord: the SDK's `authorize` code, exchanged by the server
+/// for a bearer session. Keeps both tokens in memory and returns the account,
+/// or a message for the sign-in view.
+pub(crate) async fn sign_in() -> Result<Account, String> {
+    let config: AuthConfig = api_get("/api/auth/config")
+        .await
+        .map_err(|err| format!("Couldn't reach the server ({err})."))?;
+    let client_id = config
+        .discord_client_id
+        .ok_or("Discord sign-in isn't configured on this server.")?;
+    let code = authorize(&client_id)
+        .await
+        .map_err(|err| format!("Discord sign-in was cancelled or failed ({err})."))?;
+    let response: DiscordLoginResponse = api_post("/api/auth/discord", &DiscordLoginRequest { code })
+        .await
+        .map_err(|err| format!("Sign-in failed ({err})."))?;
+    set_token(Some(response.token));
+    ACCESS_TOKEN.with_borrow_mut(|slot| *slot = Some(response.discord_access_token));
+    Ok(response.account)
+}
+
+/// Forgets both tokens (local half of signing out).
+pub(crate) fn sign_out() {
+    set_token(None);
+    ACCESS_TOKEN.with_borrow_mut(|slot| *slot = None);
+}
+
 /// Runs the SDK handshake and `authorize` (`identify` scope), returning the
 /// OAuth2 code for the server to exchange.
-pub(crate) async fn authorize(client_id: &str) -> Result<String, String> {
+async fn authorize(client_id: &str) -> Result<String, String> {
     let code = discord_authorize(client_id).await.map_err(describe)?;
     code.as_string()
         .ok_or_else(|| "Discord returned no authorization code".to_string())
-}
-
-pub(crate) fn set_access_token(token: Option<String>) {
-    ACCESS_TOKEN.with_borrow_mut(|slot| *slot = token);
 }
 
 /// Authenticates the Discord SDK with the signed-in user's access token. Only

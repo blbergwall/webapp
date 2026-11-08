@@ -73,7 +73,7 @@ Create the DNS records `fly certs add` prints (A/AAAA, or a CNAME to `webapp-exa
 
 ## Discord app setup
 
-Once per Discord application, in the [Developer Portal](https://discord.com/developers/applications):
+Only for apps that run as a Discord activity (the `discord-activity` Cargo feature; the example enables it). Once per Discord application, in the [Developer Portal](https://discord.com/developers/applications):
 
 1. **Activities → Settings:** enable Activities.
 2. **Activities → URL Mappings:** Root Mapping prefix `/` → target host **without** `https://`: the Fly host (`webapp-example.fly.dev`) or the custom domain in production, and the dev tunnel host (`webapp-dev.fadetovoid.win`) in development. No proxy path mappings are needed, because everything is served from one origin and the Discord SDK is bundled.
@@ -93,7 +93,7 @@ Once per Discord application, in the [Developer Portal](https://discord.com/deve
 | `RESEND_FROM_EMAIL` | with `RESEND_API_KEY` | no | secret | Sender address on a Resend-verified domain |
 | `PUBLIC_BASE_URL` | for email login | no | `[env]` | Origin the emailed login link points at |
 | `APP_NAME` | no (default `webapp`) | no | `[env]` | Shown in the login email subject and body |
-| `DISCORD_CLIENT_ID` | for Discord login (set both or neither) | no | secret | Discord application ID |
+| `DISCORD_CLIENT_ID` | for Discord activity login (set both or neither) | no | secret | Discord application ID |
 | `DISCORD_CLIENT_SECRET` | with `DISCORD_CLIENT_ID` | yes | secret | Discord OAuth2 secret |
 | `DEV_MODE` | no | no | local only | `1` with no Resend key prints login links to the console. **Never set in production.** |
 | `BIND_ADDR` | no | no | image | Listen address (`0.0.0.0:8080` in the image; `127.0.0.1:3000` default locally) |
@@ -105,4 +105,4 @@ Once per Discord application, in the [Developer Portal](https://discord.com/deve
 2. In `Dockerfile`, replace `example/client` and `example-server` (both the build and `COPY` lines) with the app's client directory and server package name. Keep its `Trunk.toml` outputting to `build/dist`, or change the `COPY --from=builder` path to match.
 3. In `fly.toml`, set `app`, `primary_region`, `APP_NAME` and `PUBLIC_BASE_URL`.
 4. Depend on the framework through its GitHub git dependency pinned to a tag, not a path (implementation guide §1). The build only sees the app's folder. If you develop against a local copy via a `.cargo/config.toml` patch, keep `.cargo` in `.dockerignore`.
-5. Follow **First deploy** and **Discord app setup** above with the new app's names.
+5. Follow **First deploy** (and, for a Discord activity, **Discord app setup**) above with the new app's names.

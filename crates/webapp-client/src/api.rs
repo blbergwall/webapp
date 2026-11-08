@@ -1,19 +1,23 @@
 //! JSON fetch helpers for the app's own `/api/*` routes, built directly on
 //! the browser's `fetch`.
 
-use std::{cell::RefCell, fmt};
+#[cfg(feature = "discord-activity")]
+use std::cell::RefCell;
+use std::fmt;
 
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestCredentials, RequestInit, Response};
 
+#[cfg(feature = "discord-activity")]
 thread_local! {
     /// Session token in Discord activity mode (sent as `Authorization:
     /// Bearer`). `None` in website mode, which uses the session cookie.
     static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+#[cfg(feature = "discord-activity")]
 pub(crate) fn set_token(token: Option<String>) {
     TOKEN.with_borrow_mut(|slot| *slot = token);
 }
@@ -67,6 +71,7 @@ async fn request<T: DeserializeOwned>(
     if body.is_some() {
         headers.set("Content-Type", "application/json").map_err(js_error)?;
     }
+    #[cfg(feature = "discord-activity")]
     if let Some(token) = TOKEN.with_borrow(Clone::clone) {
         headers
             .set("Authorization", &format!("Bearer {token}"))

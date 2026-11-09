@@ -126,6 +126,14 @@ impl Redis {
         Ok(!self.command(&args).await?.is_null())
     }
 
+    /// `EXPIRE key ttl_secs` — reset a key's TTL. Returns `false` if the key
+    /// doesn't exist.
+    pub async fn expire(&self, key: &str, ttl_secs: u64) -> Result<bool> {
+        let ttl = ttl_secs.to_string();
+        let result = self.command(&["EXPIRE", &self.key(key), &ttl]).await?;
+        Ok(result.as_i64() == Some(1))
+    }
+
     /// `DEL key`
     pub async fn del(&self, key: &str) -> Result<()> {
         self.command(&["DEL", &self.key(key)]).await?;

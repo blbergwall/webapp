@@ -7,12 +7,16 @@ use axum::{
     routing::get,
 };
 use tower_http::services::ServeDir;
-use webapp_server::{Auth, WebApp, WsAuth, webapp_common::Account};
+use webapp_server::{Auth, Config, WebApp, WsAuth, webapp_common::Account};
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    let webapp = WebApp::from_env().unwrap_or_else(|err| panic!("config error: {err:#}"));
+    let mut config = Config::from_env().unwrap_or_else(|err| panic!("config error: {err:#}"));
+    // Keep sessions in memory so most requests skip Redis. Only safe because
+    // this server runs as a single instance (one Fly machine).
+    config.session_cache = true;
+    let webapp = WebApp::new(config);
     let addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     // The trunk-built client. In dev, `trunk serve` serves it instead.
     let static_dir =

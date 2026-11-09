@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use webapp_common::Account;
 
-use crate::{keys, random::random_hex, redis::Redis};
+use crate::{WebApp, email::normalize_email, keys, random::random_hex, redis::Redis};
 
 /// Loads an account by id.
 pub async fn get(redis: &Redis, account_id: &str) -> Result<Option<Account>> {
@@ -13,6 +13,17 @@ pub async fn get(redis: &Redis, account_id: &str) -> Result<Option<Account>> {
     let account = serde_json::from_str(&json)
         .with_context(|| format!("corrupt account record {account_id}"))?;
     Ok(Some(account))
+}
+
+/// The account that signs in with `email`, if there is one. The address is
+/// normalized the way email sign-in does it (trimmed, lowercased), and an
+/// address it would reject finds nothing. For app features keyed by email,
+/// e.g. an admin screen's "grant credits to *email*".
+pub async fn find_by_email(redis: &Redis, email: &str) -> Result<Option<Account>> {
+    let Some(email) = normalize_email(email) else {
+        return Ok(None);
+    };
+    follow_identity(redis, &format!("{}{email}", keys::IDENTITY_EMAIL)).await
 }
 
 /// Returns the account that `identity_key` (e.g. `FE<email>`, unprefixed)
@@ -97,11 +108,12 @@ pub(crate) async fn find_or_create_by_discord(
 /// Without a trusted email the account is keyed by `sub` alone, with no
 /// email, and never claims an address.
 pub(crate) async fn find_or_create_by_google(
-    redis: &Redis,
+    app: &WebApp,
     sub: &str,
     trusted_email: Option<&str>,
     name: Option<&str>,
 ) -> Result<Account> {
+    let redis = app.redis();
     let google_key = format!("{}{sub}", keys::IDENTITY_GOOGLE);
     if let Some(account) = follow_identity(redis, &google_key).await? {
         return Ok(account);
@@ -119,6 +131,9 @@ pub(crate) async fn find_or_create_by_google(
             account.google_id = Some(sub.to_string());
             let account_key = format!("{}{}", keys::ACCOUNT, account.id);
             redis.set(&account_key, &serde_json::to_string(&account)?).await?;
+            if let Some(cache) = app.session_cache() {
+                cache.update_account(&account);
+            }
             return Ok(account);
         }
     }

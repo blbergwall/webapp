@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "example-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "leptos",
  "webapp-client",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "example-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "axum",
  "dotenvy",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "webapp-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "js-sys",
  "leptos",
@@ -2820,14 +2820,14 @@ dependencies = [
 
 [[package]]
 name = "webapp-common"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "webapp-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderValue, header};
 
@@ -42,6 +44,24 @@ pub async fn create(redis: &Redis, account_id: &str, kind: SessionKind) -> Resul
 /// sliding TTL in the same command.
 pub async fn resolve(redis: &Redis, token: &str) -> Result<Option<String>> {
     redis.getex(&session_key(token), ttl_secs(token)).await
+}
+
+/// Resets a session's sliding TTL without reading it (used by the session
+/// cache). Returns `false` if the session no longer exists.
+pub(crate) async fn refresh(redis: &Redis, token: &str) -> Result<bool> {
+    redis.expire(&session_key(token), ttl_secs(token)).await
+}
+
+/// How long the session cache may go without resetting a session's Redis
+/// TTL: a small fraction of the TTL, so a cached session never expires in
+/// Redis.
+#[cfg_attr(not(feature = "discord-activity"), allow(unused_variables))]
+pub(crate) fn cache_refresh_interval(token: &str) -> Duration {
+    #[cfg(feature = "discord-activity")]
+    if token.starts_with(ACTIVITY_TOKEN_PREFIX) {
+        return Duration::from_secs(60 * 60);
+    }
+    Duration::from_secs(24 * 60 * 60)
 }
 
 /// The sliding TTL for a session, by the kind its token encodes.
@@ -143,6 +163,17 @@ mod tests {
         assert_eq!(ttl_secs("abc123"), keys::SESSION_TTL_SECS);
         #[cfg(feature = "discord-activity")]
         assert_eq!(ttl_secs("dc_abc123"), keys::ACTIVITY_SESSION_TTL_SECS);
+    }
+
+    #[test]
+    fn cache_refresh_well_inside_ttl() {
+        let website = cache_refresh_interval("abc123").as_secs();
+        assert!(website * 10 <= keys::SESSION_TTL_SECS);
+        #[cfg(feature = "discord-activity")]
+        {
+            let activity = cache_refresh_interval("dc_abc123").as_secs();
+            assert!(activity * 10 <= keys::ACTIVITY_SESSION_TTL_SECS);
+        }
     }
 
     #[test]

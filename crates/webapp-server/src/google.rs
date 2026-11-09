@@ -88,7 +88,7 @@ async fn sign_in(
 
     let trusted = trusted_email(&claims);
     let account = account::find_or_create_by_google(
-        app.redis(),
+        app,
         &claims.sub,
         trusted.as_deref(),
         claims.name.as_deref(),

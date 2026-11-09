@@ -1,3 +1,6 @@
+use std::time::Instant;
+
+use anyhow::Result;
 use axum::{
     Json,
     extract::{FromRef, FromRequestParts, State},
@@ -10,6 +13,7 @@ use crate::{
     WebApp, account,
     error::ApiError,
     session::{self, SESSION_COOKIE},
+    session_cache::Lookup,
 };
 
 /// Extractor for the signed-in account. Put it on any handler that requires
@@ -41,14 +45,46 @@ where
             return Err(ApiError::Forbidden);
         }
         let token = token.to_string();
-
-        let account_id = session::resolve(app.redis(), &token)
-            .await?
-            .ok_or(ApiError::Unauthorized)?;
-        let account = account::get(app.redis(), &account_id)
+        let account = resolve_account(&app, &token, Instant::now())
             .await?
             .ok_or(ApiError::Unauthorized)?;
         Ok(Auth(account))
+    }
+}
+
+/// The account a session token belongs to, or `None` if the session doesn't
+/// exist. With the session cache on, usually answered from memory; otherwise
+/// two Redis calls (the session, which also slides its TTL, then the
+/// account).
+pub(crate) async fn resolve_account(app: &WebApp, token: &str, now: Instant) -> Result<Option<Account>> {
+    let Some(cache) = app.session_cache() else {
+        return load_account(app, token).await;
+    };
+    match cache.lookup(token, now, session::cache_refresh_interval(token)) {
+        Lookup::Hit(account) => Ok(Some(account)),
+        Lookup::Refresh(account) => {
+            if session::refresh(app.redis(), token).await? {
+                cache.refreshed(token, now);
+                Ok(Some(account))
+            } else {
+                cache.remove(token);
+                Ok(None)
+            }
+        }
+        Lookup::Miss { generation } => {
+            let account = load_account(app, token).await?;
+            if let Some(account) = &account {
+                cache.insert(token, account.clone(), generation, now);
+            }
+            Ok(account)
+        }
+    }
+}
+
+async fn load_account(app: &WebApp, token: &str) -> Result<Option<Account>> {
+    match session::resolve(app.redis(), token).await? {
+        Some(account_id) => account::get(app.redis(), &account_id).await,
+        None => Ok(None),
     }
 }
 
@@ -116,6 +152,12 @@ pub(crate) async fn logout(
             return Err(ApiError::Forbidden);
         }
         session::delete(app.redis(), token).await?;
+        // After the delete: a request that read the session before it can no
+        // longer cache it (the generation moves), and any later one finds
+        // nothing in Redis.
+        if let Some(cache) = app.session_cache() {
+            cache.remove(token);
+        }
     }
     Ok((
         StatusCode::NO_CONTENT,

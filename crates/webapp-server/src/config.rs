@@ -22,6 +22,11 @@ pub struct Config {
     /// enabled.
     pub public_base_url: Option<String>,
     pub email: EmailDelivery,
+    /// Cache sessions and their accounts in memory, so most authenticated
+    /// requests make no Redis call. **Single-instance deployments only:** a
+    /// logout or account change on one server can't reach another server's
+    /// cache. Off by default; apps set it in code (it has no env var).
+    pub session_cache: bool,
 }
 
 /// Discord application credentials (`DISCORD_CLIENT_ID`,
@@ -97,6 +102,7 @@ impl Config {
             app_name: optional("APP_NAME").unwrap_or_else(|| "webapp".to_string()),
             public_base_url,
             email,
+            session_cache: false,
         })
     }
 }

@@ -105,6 +105,133 @@ async fn session_lifecycle_and_prefix() {
 
 #[tokio::test]
 #[ignore]
+async fn find_account_by_email() {
+    let app = test_app();
+    let redis = app.redis();
+
+    let account = account::find_or_create_by_email(redis, "fiona@example.com").await.unwrap();
+    let found = account::find_by_email(redis, "  Fiona@Example.COM ").await.unwrap();
+    assert_eq!(found, Some(account));
+    assert_eq!(account::find_by_email(redis, "nobody@example.com").await.unwrap(), None);
+    assert_eq!(account::find_by_email(redis, "not-an-email").await.unwrap(), None);
+
+    cleanup(&app).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn resolve_account_without_cache() {
+    use std::time::Instant;
+
+    use crate::auth::resolve_account;
+
+    let app = test_app();
+    let redis = app.redis();
+    let account = account::find_or_create_by_email(redis, "plain@example.com").await.unwrap();
+    let token = session::create(redis, &account.id, SessionKind::Website).await.unwrap();
+
+    assert_eq!(resolve_account(&app, &token, Instant::now()).await.unwrap(), Some(account));
+    session::delete(redis, &token).await.unwrap();
+    assert_eq!(resolve_account(&app, &token, Instant::now()).await.unwrap(), None);
+
+    cleanup(&app).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn session_cache_refresh_and_invalidation() {
+    use std::time::{Duration, Instant};
+
+    use axum::{
+        extract::State,
+        http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+        response::IntoResponse,
+    };
+
+    use crate::auth::{self, resolve_account};
+
+    dotenvy::dotenv().ok();
+    let mut config = Config::from_env().expect("live tests need Upstash settings in .env");
+    config.key_prefix = format!("webapp-test:{}:", random_hex(4));
+    config.session_cache = true;
+    let app = WebApp::new(config);
+    let redis = app.redis();
+
+    const MINUTE: Duration = Duration::from_secs(60);
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    let ttl = |token: &str| {
+        let key = redis.key(&format!("{}{token}", keys::SESSION));
+        async move { redis.command(&["TTL", &key]).await.unwrap().as_i64().unwrap() }
+    };
+
+    let account = account::find_or_create_by_email(redis, "cache@example.com").await.unwrap();
+    let token = session::create(redis, &account.id, SessionKind::Website).await.unwrap();
+    let start = Instant::now();
+
+    // A miss reads Redis and fills the cache.
+    assert_eq!(resolve_account(&app, &token, start).await.unwrap(), Some(account.clone()));
+
+    // Hits don't touch Redis: the session's (shortened) TTL isn't reset. The
+    // entry stays in use every 30 minutes, so the idle sweep keeps it.
+    redis
+        .command(&["EXPIRE", &redis.key(&format!("{}{token}", keys::SESSION)), "100"])
+        .await
+        .unwrap();
+    let mut now = start;
+    while now + 30 * MINUTE < start + DAY {
+        now += 30 * MINUTE;
+        assert_eq!(resolve_account(&app, &token, now).await.unwrap(), Some(account.clone()));
+    }
+    assert!(ttl(&token).await <= 100);
+
+    // A day after the last refresh, a hit resets the Redis TTL.
+    let refreshed = start + DAY;
+    assert_eq!(resolve_account(&app, &token, refreshed).await.unwrap(), Some(account.clone()));
+    assert!(ttl(&token).await > (keys::SESSION_TTL_SECS - 60) as i64);
+
+    // A session deleted behind the cache's back is dropped at its next
+    // refresh (and then misses in Redis).
+    session::delete(redis, &token).await.unwrap();
+    let mut now = refreshed;
+    while now + 30 * MINUTE < refreshed + DAY {
+        now += 30 * MINUTE;
+        assert!(resolve_account(&app, &token, now).await.unwrap().is_some());
+    }
+    assert_eq!(resolve_account(&app, &token, refreshed + DAY).await.unwrap(), None);
+    assert_eq!(resolve_account(&app, &token, refreshed + DAY).await.unwrap(), None);
+
+    // Logout drops the cached session at once.
+    let token = session::create(redis, &account.id, SessionKind::Website).await.unwrap();
+    let now = Instant::now();
+    assert!(resolve_account(&app, &token, now).await.unwrap().is_some());
+    let mut headers = HeaderMap::new();
+    let cookie = format!("{}={token}", session::SESSION_COOKIE);
+    headers.insert(header::COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    let response = auth::logout(State(app.clone()), Method::POST, headers)
+        .await
+        .unwrap()
+        .into_response();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resolve_account(&app, &token, now + MINUTE).await.unwrap(), None);
+
+    // Linking Google to an email account updates its cached sessions.
+    let bob = account::find_or_create_by_email(redis, "bob@gmail.com").await.unwrap();
+    let token = session::create(redis, &bob.id, SessionKind::Website).await.unwrap();
+    let cached = resolve_account(&app, &token, now).await.unwrap().unwrap();
+    assert_eq!(cached.google_id, None);
+    let linked = account::find_or_create_by_google(&app, "g9", Some("bob@gmail.com"), Some("Bob"))
+        .await
+        .unwrap();
+    assert_eq!(linked.id, bob.id);
+    let cached = resolve_account(&app, &token, now + MINUTE).await.unwrap().unwrap();
+    assert_eq!(cached.google_id.as_deref(), Some("g9"));
+
+    cleanup(&app).await;
+}
+
+#[tokio::test]
+#[ignore]
 async fn email_login_flow() {
     use axum::{
         Json,
@@ -229,7 +356,7 @@ async fn google_account_matching_by_trusted_email() {
 
     // New Google user with a trusted email: a new account that also owns the
     // email identity, so a later email sign-in reaches it.
-    let created = account::find_or_create_by_google(redis, "g1", Some("ann@gmail.com"), Some("Ann"))
+    let created = account::find_or_create_by_google(&app, "g1", Some("ann@gmail.com"), Some("Ann"))
         .await
         .unwrap();
     assert_eq!(created.google_id.as_deref(), Some("g1"));
@@ -239,7 +366,7 @@ async fn google_account_matching_by_trusted_email() {
     assert_eq!(by_email.id, created.id);
 
     // Same Google user again: same account.
-    let again = account::find_or_create_by_google(redis, "g1", Some("ann@gmail.com"), None)
+    let again = account::find_or_create_by_google(&app, "g1", Some("ann@gmail.com"), None)
         .await
         .unwrap();
     assert_eq!(again, created);
@@ -247,7 +374,7 @@ async fn google_account_matching_by_trusted_email() {
     // An existing email account gets linked to a Google user with that
     // trusted address, and remembers the link.
     let email_account = account::find_or_create_by_email(redis, "bob@example.com").await.unwrap();
-    let linked = account::find_or_create_by_google(redis, "g2", Some("bob@example.com"), Some("Bob"))
+    let linked = account::find_or_create_by_google(&app, "g2", Some("bob@example.com"), Some("Bob"))
         .await
         .unwrap();
     assert_eq!(linked.id, email_account.id);
@@ -258,18 +385,18 @@ async fn google_account_matching_by_trusted_email() {
 
     // Without a trusted email: a separate account with no email, which never
     // claims the address (an email sign-in for it is still its own account).
-    let untrusted = account::find_or_create_by_google(redis, "g3", None, Some("Cy")).await.unwrap();
+    let untrusted = account::find_or_create_by_google(&app, "g3", None, Some("Cy")).await.unwrap();
     assert_eq!(untrusted.email, None);
     assert_eq!(untrusted.google_id.as_deref(), Some("g3"));
     let cy_email = account::find_or_create_by_email(redis, "cy@example.com").await.unwrap();
     assert_ne!(cy_email.id, untrusted.id);
 
     // Display name falls back to the email's local part, then "Google user".
-    let unnamed = account::find_or_create_by_google(redis, "g4", Some("dee@gmail.com"), Some("  "))
+    let unnamed = account::find_or_create_by_google(&app, "g4", Some("dee@gmail.com"), Some("  "))
         .await
         .unwrap();
     assert_eq!(unnamed.display_name, "dee");
-    let anonymous = account::find_or_create_by_google(redis, "g5", None, None).await.unwrap();
+    let anonymous = account::find_or_create_by_google(&app, "g5", None, None).await.unwrap();
     assert_eq!(anonymous.display_name, "Google user");
 
     cleanup(&app).await;

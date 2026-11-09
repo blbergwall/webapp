@@ -150,6 +150,7 @@ mod tests {
             app_name: "test".to_string(),
             public_base_url: None,
             email: EmailDelivery::Disabled,
+            session_cache: false,
         })
     }
 

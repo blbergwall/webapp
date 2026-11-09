@@ -62,6 +62,16 @@ async fn list_things(Auth(account): Auth) -> Result<Json<Vec<Thing>>, ApiError> 
 - **Errors:** return `ApiError`. Any `anyhow::Error` converts with `?` into a logged, generic 500, so details never reach the client. The other variants map to 400/401/403/404/409/410/429.
 - **CSRF rule:** a cookie-authenticated request with a method other than GET/HEAD/OPTIONS must send `Content-Type: application/json`, or `Auth` rejects it with 403. Design write endpoints to take JSON. The client helpers always send it.
 - **Sessions:** website sessions are a 90-day sliding cookie. (Discord activity sessions are bearer tokens; see §4.)
+- **Session cache (single-instance apps only):** by default `Auth` makes two Redis calls per request (the session, then the account). An app that runs as **exactly one server process** can keep both in memory:
+
+  ```rust
+  let mut config = webapp_server::Config::from_env()?;
+  config.session_cache = true; // single instance only
+  let webapp = WebApp::new(config);
+  ```
+
+  Most requests then make no Redis call. A cached session's Redis TTL is reset at most once a day (once an hour for activity sessions), sessions idle for an hour drop out of memory and reload on their next request, and logout and framework account updates apply to the cache at once. Redis stays the source of truth, so a restart only empties the cache. Never turn it on for an app that runs on several machines: a logout on one wouldn't reach the others' caches. It's off by default and has no env var, so a deploy can't switch it on by accident.
+- **Finding an account by email:** apps must not read `F*` keys themselves. `webapp_server::account::find_by_email(webapp.redis(), email)` returns the `Account` that signs in with that address (`Ok(None)` if there's none, or the address is invalid), normalizing it the way email sign-in does. Use it for features keyed by email, such as an admin screen's "grant credits to *email*". It finds accounts that own the email identity: email sign-ups, and Google accounts with an address Google is authoritative for.
 - **Identity:** an `Account` (`id`, `display_name`, `email?`, `discord_id?`, `google_id?`) is keyed by its internal `id`. Use `account.id` as the key for the app's own data, never the email, Discord or Google ID. How sign-ins map to accounts:
   - **Discord** sign-ins are always their own accounts, never matched to email (Discord web and activity sign-in share one account, keyed by the Discord user ID).
   - **Google** sign-ins are matched to the email account for the same address, in both directions, but **only when Google is authoritative for the address**: it's verified and either an `@gmail.com` address or a Google Workspace account. Any other Google account (e.g. one registered with a third-party address) gets its own account with no email, because Google says such an address may have changed hands.
@@ -190,7 +200,7 @@ Codes the framework uses today (from `crates/webapp-server/src/keys.rs`; new fra
 
 Each app should keep its own prefixes in one documented module (like the framework's `keys.rs`), as the single place to check before choosing a new one.
 
-**Accessing Redis from an app:** use `webapp.redis()` (`Redis`). Its helpers (`get`, `getex`, `getdel`, `set`, `set_ex`, `set_nx_ex`, `del`) take **unprefixed** keys and add the optional `REDIS_KEY_PREFIX` namespace themselves. For any other command, build each key with `redis.key("AW123")` and pass it to `redis.command(&[...])`. The namespace prefix sits in front of the whole key (e.g. `myapp:AW123`) and is separate from the 2-character record prefix.
+**Accessing Redis from an app:** use `webapp.redis()` (`Redis`). Its helpers (`get`, `getex`, `getdel`, `set`, `set_ex`, `set_nx_ex`, `expire`, `del`) take **unprefixed** keys and add the optional `REDIS_KEY_PREFIX` namespace themselves. For any other command, build each key with `redis.key("AW123")` and pass it to `redis.command(&[...])`. The namespace prefix sits in front of the whole key (e.g. `myapp:AW123`) and is separate from the 2-character record prefix.
 
 ## 7. Configuration and deployment
 

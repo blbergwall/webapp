@@ -8,6 +8,9 @@
 //!   and the bearer-token sessions it issues.
 //! - `ws`: authenticated WebSockets ([`ws_router`], `WsAuth`).
 //!
+//! Single-instance apps can set `Config::session_cache` to keep sessions and
+//! their accounts in memory, so most requests skip Redis.
+//!
 //! Wiring it into an app:
 //!
 //! ```ignore
@@ -38,10 +41,13 @@ mod oauth;
 mod random;
 mod redis;
 mod session;
+mod session_cache;
 #[cfg(feature = "ws")]
 mod ws;
 
 use std::sync::Arc;
+
+use session_cache::SessionCache;
 
 use axum::{
     Router,
@@ -65,13 +71,21 @@ struct Inner {
     config: Config,
     http: reqwest::Client,
     redis: Redis,
+    /// `Some` when `Config::session_cache` is on.
+    session_cache: Option<SessionCache>,
 }
 
 impl WebApp {
     pub fn new(config: Config) -> Self {
         let http = reqwest::Client::new();
         let redis = Redis::new(&config, http.clone());
-        Self(Arc::new(Inner { config, http, redis }))
+        let session_cache = config.session_cache.then(SessionCache::new);
+        Self(Arc::new(Inner {
+            config,
+            http,
+            redis,
+            session_cache,
+        }))
     }
 
     /// Builds the framework from environment variables (see `Config`).
@@ -86,6 +100,10 @@ impl WebApp {
     /// Shared HTTP client for outbound API calls (Resend, Discord).
     pub(crate) fn http(&self) -> &reqwest::Client {
         &self.0.http
+    }
+
+    pub(crate) fn session_cache(&self) -> Option<&SessionCache> {
+        self.0.session_cache.as_ref()
     }
 
     /// The Redis client, for apps to store their own data (under their own
